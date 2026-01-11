@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mitmproxy
+  namespace: hocuspocus
+  labels:
+    app: mitmproxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mitmproxy
+  template:
+    metadata:
+      labels:
+        app: mitmproxy
+    spec:
+      # Use host network so traffic can be redirected from VPN
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+
+      imagePullSecrets:
+        - name: ocir-secret
+
+      containers:
+        - name: mitmproxy
+          image: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/mitmproxy:latest
+          imagePullPolicy: Always
+
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: POSTGRES_PASSWORD
+            - name: YOUTUBE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mitmproxy-secrets
+                  key: YOUTUBE_API_KEY
+
+          ports:
+            - name: proxy
+              containerPort: 8080
+              hostPort: 8080
+              protocol: TCP
+
+          volumeMounts:
+            - name: mitmproxy-certs
+              mountPath: /home/mitmproxy/.mitmproxy
+
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+
+      volumes:
+        - name: mitmproxy-certs
+          persistentVolumeClaim:
+            claimName: mitmproxy-certs-pvc

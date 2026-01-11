@@ -1,0 +1,124 @@
+name: Build and Push to OCIR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'docker/**'
+      - 'docker-requirements.txt'
+      - '.github/workflows/build-push.yaml'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if no changes'
+        required: false
+        default: 'false'
+
+env:
+  OCI_REGION: eu-frankfurt-1
+  OCIR_ENDPOINT: eu-frankfurt-1.ocir.io
+
+jobs:
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh -o install-oci.sh
+          bash install-oci.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Configure OCI CLI
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          echo "$OCI_CONFIG" > ~/.oci/config
+          echo "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+      - name: Get OCIR namespace
+        id: namespace
+        run: |
+          NAMESPACE=$(oci os ns get --query 'data' --raw-output)
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "OCIR Namespace: $NAMESPACE"
+
+      - name: Login to OCIR
+        env:
+          OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+          OCI_USERNAME: ${{ secrets.OCI_USERNAME }}
+        run: |
+          echo "$OCI_AUTH_TOKEN" | docker login ${{ env.OCIR_ENDPOINT }} -u "${{ steps.namespace.outputs.namespace }}/$OCI_USERNAME" --password-stdin
+
+      - name: Set image tags
+        id: tags
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "mitmproxy_image=${{ env.OCIR_ENDPOINT }}/${{ steps.namespace.outputs.namespace }}/hocuspocus-vpn/mitmproxy" >> $GITHUB_OUTPUT
+          echo "vpn_image=${{ env.OCIR_ENDPOINT }}/${{ steps.namespace.outputs.namespace }}/hocuspocus-vpn/vpn" >> $GITHUB_OUTPUT
+
+      - name: Build and push mitmproxy image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/mitmproxy/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.mitmproxy_image }}:${{ steps.tags.outputs.short_sha }}
+            ${{ steps.tags.outputs.mitmproxy_image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Build and push VPN image
+        uses: docker/build-push-action@v5
+        with:
+          context: docker/vpn
+          file: docker/vpn/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.vpn_image }}:${{ steps.tags.outputs.short_sha }}
+            ${{ steps.tags.outputs.vpn_image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Update kustomization with new image tags
+        run: |
+          cd k8s
+          # Update image tags in kustomization.yaml
+          sed -i "s|newTag:.*|newTag: ${{ steps.tags.outputs.short_sha }}|g" kustomization.yaml
+
+      - name: Commit and push kustomization changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/kustomization.yaml
+          git diff --staged --quiet || git commit -m "Update image tags to ${{ steps.tags.outputs.short_sha }}"
+          git push
+
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.tags.outputs.short_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Images Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.tags.outputs.mitmproxy_image }}:${{ steps.tags.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.tags.outputs.vpn_image }}:${{ steps.tags.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will automatically sync the new images." >> $GITHUB_STEP_SUMMARY

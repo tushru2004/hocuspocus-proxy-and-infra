@@ -1,0 +1,32 @@
+# Persistent Volume Claim for VPN certificates
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vpn-certs-pvc
+  namespace: hocuspocus
+  labels:
+    app: vpn-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: oci-bv
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Persistent Volume Claim for mitmproxy certificates
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mitmproxy-certs-pvc
+  namespace: hocuspocus
+  labels:
+    app: mitmproxy
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: oci-bv
+  resources:
+    requests:
+      storage: 1Gi

@@ -1,0 +1,12 @@
+tldextract==5.1.3
+psycopg[binary]==3.3.2
+requests>=2.32.0
+
+# Security updates for vulnerable dependencies
+# Force upgrade to latest available versions to patch CVEs
+urllib3>=2.3.0
+protobuf>=5.29.0
+brotli>=1.1.0
+
+# Note: h11, h2, tornado, jinja2, cryptography, werkzeug are already
+# at secure versions in mitmproxy 12.2.1 base image

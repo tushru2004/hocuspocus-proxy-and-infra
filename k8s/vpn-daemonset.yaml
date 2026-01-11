@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vpn-server
+  namespace: hocuspocus
+  labels:
+    app: vpn-server
+spec:
+  selector:
+    matchLabels:
+      app: vpn-server
+  template:
+    metadata:
+      labels:
+        app: vpn-server
+    spec:
+      # Use host networking for VPN
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+
+      # Image pull secret for OCIR
+      imagePullSecrets:
+        - name: ocir-secret
+
+      # Init container to set up iptables
+      initContainers:
+        - name: iptables-setup
+          image: alpine:3.19
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Setting up iptables rules..."
+
+              # Enable IP forwarding
+              echo 1 > /proc/sys/net/ipv4/ip_forward
+
+              # Get default interface
+              IFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
+              echo "Default interface: $IFACE"
+
+              # NAT for VPN clients
+              iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -o $IFACE -j MASQUERADE
+              iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+              iptables -A FORWARD -s 10.10.10.0/24 -j ACCEPT
+
+              # Redirect HTTP/HTTPS to mitmproxy
+              # Mitmproxy runs on port 8080 on the host (via hostPort)
+              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 80 -j REDIRECT --to-port 8080
+              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 443 -j REDIRECT --to-port 8080
+
+              # Block QUIC to force HTTPS fallback
+              iptables -I FORWARD -p udp --dport 443 -s 10.10.10.0/24 -j REJECT
+
+              echo "iptables setup complete"
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+
+      containers:
+        - name: strongswan
+          image: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/vpn:latest
+          imagePullPolicy: Always
+
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+
+          env:
+            - name: VPN_SERVER_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: VPN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-secrets
+                  key: VPN_USERNAME
+            - name: VPN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-secrets
+                  key: VPN_PASSWORD
+            - name: SETUP_IPTABLES
+              value: "false"  # Handled by init container
+
+          ports:
+            - name: ike
+              containerPort: 500
+              hostPort: 500
+              protocol: UDP
+            - name: nat-t
+              containerPort: 4500
+              hostPort: 4500
+              protocol: UDP
+
+          volumeMounts:
+            - name: vpn-certs
+              mountPath: /etc/ipsec.d
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          livenessProbe:
+            exec:
+              command:
+                - ipsec
+                - status
+            initialDelaySeconds: 30
+            periodSeconds: 30
+
+      volumes:
+        - name: vpn-certs
+          persistentVolumeClaim:
+            claimName: vpn-certs-pvc
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule

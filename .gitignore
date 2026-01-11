@@ -1,0 +1,49 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+crash.log
+
+# Kubernetes secrets (never commit!)
+k8s/secrets.yaml
+
+# OCI credentials
+*.pem
+*.key
+.oci/
+
+# Certificates
+*.p12
+*.cer
+*.mobileconfig
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

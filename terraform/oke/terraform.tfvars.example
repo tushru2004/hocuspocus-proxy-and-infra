@@ -1,0 +1,48 @@
+# =============================================================================
+# OCI Authentication
+# Get these values from OCI Console
+# =============================================================================
+
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+user_ocid        = "ocid1.user.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+
+# =============================================================================
+# Region
+# =============================================================================
+
+region = "eu-frankfurt-1"
+
+# =============================================================================
+# OKE Cluster
+# =============================================================================
+
+cluster_name       = "hocuspocus-vpn"
+kubernetes_version = "v1.31.1"
+
+# =============================================================================
+# Node Pool
+# =============================================================================
+
+node_pool_name           = "hocuspocus-vpn-pool"
+node_shape               = "VM.Standard.E4.Flex"
+node_ocpus               = 2
+node_memory_gb           = 4
+node_count               = 1
+node_boot_volume_size_gb = 50
+use_preemptible_nodes    = true  # 50% cost savings
+
+# =============================================================================
+# ArgoCD
+# =============================================================================
+
+install_argocd   = true
+argocd_namespace = "argocd"
+
+# =============================================================================
+# Container Registry
+# =============================================================================
+
+ocir_repo_name = "hocuspocus-vpn"

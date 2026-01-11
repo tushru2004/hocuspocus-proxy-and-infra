@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hocuspocus
+
+resources:
+  - namespace.yaml
+  - configmaps.yaml
+  - pvcs.yaml
+  - postgres-statefulset.yaml
+  - mitmproxy-deployment.yaml
+  - vpn-daemonset.yaml
+  - services.yaml
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/name: hocuspocus-vpn
+  app.kubernetes.io/managed-by: argocd
+
+# Image customization for OCIR
+images:
+  - name: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/vpn
+    newName: eu-frankfurt-1.ocir.io/fraaqk6ndfn5/hocuspocus-vpn/vpn
+    newTag: latest
+  - name: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/mitmproxy
+    newName: eu-frankfurt-1.ocir.io/fraaqk6ndfn5/hocuspocus-vpn/mitmproxy
+    newTag: latest

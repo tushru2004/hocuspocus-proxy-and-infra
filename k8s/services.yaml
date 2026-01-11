@@ -1,0 +1,66 @@
+# PostgreSQL Service (ClusterIP - internal only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: hocuspocus
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+
+---
+# Mitmproxy Service (ClusterIP - internal only)
+# Traffic is redirected via iptables, not through the service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mitmproxy-service
+  namespace: hocuspocus
+  labels:
+    app: mitmproxy
+spec:
+  type: ClusterIP
+  selector:
+    app: mitmproxy
+  ports:
+    - name: proxy
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+# VPN Service (LoadBalancer with UDP support)
+# This exposes IKEv2 ports to the internet
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpn-service
+  namespace: hocuspocus
+  labels:
+    app: vpn-server
+  annotations:
+    # OCI Load Balancer annotations
+    oci.oraclecloud.com/load-balancer-type: "nlb"  # Network Load Balancer for UDP
+    oci-network-load-balancer.oraclecloud.com/backend-policy: "FIVE_TUPLE"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local  # Preserve client IP
+  selector:
+    app: vpn-server
+  ports:
+    - name: ike
+      port: 500
+      targetPort: 500
+      protocol: UDP
+    - name: nat-t
+      port: 4500
+      targetPort: 4500
+      protocol: UDP

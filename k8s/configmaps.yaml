@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpn-config
+  namespace: hocuspocus
+data:
+  # VPN client IP range
+  VPN_CLIENT_CIDR: "10.10.10.0/24"
+  # DNS servers for VPN clients
+  VPN_DNS: "8.8.8.8,8.8.4.4"
+  # Enable iptables setup in VPN container
+  SETUP_IPTABLES: "true"
+  # Mitmproxy service address (within cluster)
+  MITMPROXY_HOST: "mitmproxy-service.hocuspocus.svc.cluster.local"
+  MITMPROXY_PORT: "8080"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mitmproxy-config
+  namespace: hocuspocus
+data:
+  # Database connection
+  POSTGRES_HOST: "postgres-service.hocuspocus.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "mitmproxy"
+  POSTGRES_USER: "mitmproxy"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: hocuspocus
+data:
+  POSTGRES_DB: "mitmproxy"
+  POSTGRES_USER: "mitmproxy"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: hocuspocus
+data:
+  init.sql: |
+    -- Database initialization script for mitmproxy allowed hosts
+    CREATE TABLE IF NOT EXISTS allowed_hosts (
+        id SERIAL PRIMARY KEY,
+        domain VARCHAR(255) NOT NULL UNIQUE,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_allowed_hosts_domain ON allowed_hosts(domain);
+    CREATE INDEX IF NOT EXISTS idx_allowed_hosts_enabled ON allowed_hosts(enabled);
+
+    CREATE TABLE IF NOT EXISTS youtube_channels (
+        id SERIAL PRIMARY KEY,
+        channel_id VARCHAR(255) NOT NULL UNIQUE,
+        name VARCHAR(255),
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_youtube_channels_channel_id ON youtube_channels(channel_id);
+    CREATE INDEX IF NOT EXISTS idx_youtube_channels_enabled ON youtube_channels(enabled);
+
+    CREATE TABLE IF NOT EXISTS blocked_locations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        latitude DECIMAL(10, 8) NOT NULL,
+        longitude DECIMAL(11, 8) NOT NULL,
+        radius_meters INTEGER DEFAULT 100,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_blocked_locations_enabled ON blocked_locations(enabled);
+
+    -- Insert default allowed hosts
+    INSERT INTO allowed_hosts (domain, enabled)
+    VALUES
+        ('amazon.com', true),
+        ('apple.com', true),
+        ('icloud.com', true)
+    ON CONFLICT (domain) DO NOTHING;
