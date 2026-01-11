@@ -3,6 +3,10 @@ set -e
 
 echo "Starting StrongSwan VPN setup..."
 
+# Create certificate directories if they don't exist (when using PVC mount)
+mkdir -p /etc/ipsec.d/cacerts /etc/ipsec.d/certs /etc/ipsec.d/private
+chmod 700 /etc/ipsec.d/private
+
 # Get server IP from environment or metadata
 SERVER_IP="${VPN_SERVER_IP:-}"
 if [ -z "$SERVER_IP" ]; then

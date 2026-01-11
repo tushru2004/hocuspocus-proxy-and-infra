@@ -18,10 +18,6 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 
-      # Image pull secret for OCIR
-      imagePullSecrets:
-        - name: ocir-secret
-
       # Init container to set up iptables
       initContainers:
         - name: iptables-setup
@@ -31,13 +27,16 @@ spec:
             - -c
             - |
               set -e
+              echo "Installing iptables..."
+              apk add --no-cache iptables
+
               echo "Setting up iptables rules..."
 
               # Enable IP forwarding
               echo 1 > /proc/sys/net/ipv4/ip_forward
 
-              # Get default interface
-              IFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
+              # Get default interface (using sed since busybox grep/awk may not work)
+              IFACE=$(ip route get 8.8.8.8 | sed -n 's/.* dev \([^ ]*\).*/\1/p')
               echo "Default interface: $IFACE"
 
               # NAT for VPN clients
@@ -63,7 +62,7 @@ spec:
 
       containers:
         - name: strongswan
-          image: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/vpn:latest
+          image: REGISTRY/vpn:latest
           imagePullPolicy: Always
 
           securityContext:
@@ -110,11 +109,11 @@ spec:
 
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 25m
+              memory: 64Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: 200m
+              memory: 128Mi
 
           livenessProbe:
             exec:

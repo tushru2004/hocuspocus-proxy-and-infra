@@ -19,12 +19,9 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 
-      imagePullSecrets:
-        - name: ocir-secret
-
       containers:
         - name: mitmproxy
-          image: OCIR_REGION.ocir.io/NAMESPACE/hocuspocus-vpn/mitmproxy:latest
+          image: REGISTRY/mitmproxy:latest
           imagePullPolicy: Always
 
           env:
@@ -71,11 +68,11 @@ spec:
 
           resources:
             requests:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 50m
+              memory: 128Mi
             limits:
-              cpu: 1000m
-              memory: 512Mi
+              cpu: 500m
+              memory: 256Mi
 
           readinessProbe:
             tcpSocket:

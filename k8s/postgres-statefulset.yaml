@@ -53,11 +53,11 @@ spec:
 
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 25m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 250m
+              memory: 256Mi
 
           readinessProbe:
             exec:
@@ -88,7 +88,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: oci-bv
+        storageClassName: standard-rwo
         resources:
           requests:
             storage: 10Gi
