@@ -1,4 +1,4 @@
-name: Build and Push to OCIR
+name: Build and Push to Artifact Registry
 
 on:
   push:
@@ -17,13 +17,18 @@ on:
         default: 'false'
 
 env:
-  OCI_REGION: eu-frankfurt-1
-  OCIR_ENDPOINT: eu-frankfurt-1.ocir.io
+  GCP_PROJECT: hocuspocus-vpn
+  GCP_REGION: europe-west1
+  REGISTRY: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn
 
 jobs:
   build-and-push:
     name: Build and Push Images
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -32,43 +37,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install OCI CLI
-        run: |
-          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh -o install-oci.sh
-          bash install-oci.sh --accept-all-defaults
-          echo "$HOME/bin" >> $GITHUB_PATH
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure OCI CLI
-        env:
-          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
-          OCI_KEY: ${{ secrets.OCI_KEY }}
-        run: |
-          mkdir -p ~/.oci
-          echo "$OCI_CONFIG" > ~/.oci/config
-          echo "$OCI_KEY" > ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-      - name: Get OCIR namespace
-        id: namespace
-        run: |
-          NAMESPACE=$(oci os ns get --query 'data' --raw-output)
-          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
-          echo "OCIR Namespace: $NAMESPACE"
-
-      - name: Login to OCIR
-        env:
-          OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-          OCI_USERNAME: ${{ secrets.OCI_USERNAME }}
-        run: |
-          echo "$OCI_AUTH_TOKEN" | docker login ${{ env.OCIR_ENDPOINT }} -u "${{ steps.namespace.outputs.namespace }}/$OCI_USERNAME" --password-stdin
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Set image tags
         id: tags
         run: |
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          echo "mitmproxy_image=${{ env.OCIR_ENDPOINT }}/${{ steps.namespace.outputs.namespace }}/hocuspocus-vpn/mitmproxy" >> $GITHUB_OUTPUT
-          echo "vpn_image=${{ env.OCIR_ENDPOINT }}/${{ steps.namespace.outputs.namespace }}/hocuspocus-vpn/vpn" >> $GITHUB_OUTPUT
+          echo "mitmproxy_image=${{ env.REGISTRY }}/mitmproxy" >> $GITHUB_OUTPUT
+          echo "vpn_image=${{ env.REGISTRY }}/vpn" >> $GITHUB_OUTPUT
 
       - name: Build and push mitmproxy image
         uses: docker/build-push-action@v5

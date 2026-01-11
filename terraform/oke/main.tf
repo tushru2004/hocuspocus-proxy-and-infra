@@ -10,25 +10,21 @@ data "oci_containerengine_cluster_option" "cluster_option" {
   cluster_option_id = "all"
 }
 
-# Get latest OKE node image
+# Get OKE node pool options (includes available images)
 data "oci_containerengine_node_pool_option" "node_pool_option" {
   node_pool_option_id = "all"
   compartment_id      = var.compartment_ocid
 }
 
-data "oci_core_images" "oke_images" {
-  compartment_id           = var.compartment_ocid
-  operating_system         = "Oracle Linux"
-  operating_system_version = "8"
-  shape                    = var.node_shape
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
-
-  filter {
-    name   = "display_name"
-    values = ["^.*OKE.*$"]
-    regex  = true
-  }
+# Find x86 OKE image matching our K8s version
+locals {
+  node_image = [
+    for img in data.oci_containerengine_node_pool_option.node_pool_option.sources :
+    img if can(regex("OKE-1\\.31", img.source_name)) &&
+           can(regex("Oracle-Linux-8", img.source_name)) &&
+           !can(regex("aarch64", img.source_name)) &&
+           !can(regex("GPU", img.source_name))
+  ][0]
 }
 
 # =============================================================================
@@ -317,7 +313,7 @@ resource "oci_containerengine_node_pool" "oke_node_pool" {
 
   node_source_details {
     source_type             = "IMAGE"
-    image_id                = data.oci_core_images.oke_images.images[0].id
+    image_id                = local.node_image.image_id
     boot_volume_size_in_gbs = var.node_boot_volume_size_gb
   }
 

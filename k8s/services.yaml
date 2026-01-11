@@ -47,11 +47,11 @@ metadata:
   labels:
     app: vpn-server
   annotations:
-    # OCI Load Balancer annotations
-    oci.oraclecloud.com/load-balancer-type: "nlb"  # Network Load Balancer for UDP
-    oci-network-load-balancer.oraclecloud.com/backend-policy: "FIVE_TUPLE"
+    # GKE Load Balancer annotations
+    cloud.google.com/network-tier: "Standard"  # Cheaper than Premium
 spec:
   type: LoadBalancer
+  loadBalancerIP: "35.210.225.36"  # Static IP from terraform
   externalTrafficPolicy: Local  # Preserve client IP
   selector:
     app: vpn-server
