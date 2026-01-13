@@ -131,3 +131,72 @@ class HTMLBlockPageRenderer:
     </div>
 </body>
 </html>"""
+
+    def render_youtube_block_page(self, channel_name: str = None) -> str:
+        """Render YouTube channel block page."""
+        channel_info = f"Channel: {channel_name}" if channel_name else "This channel"
+        return f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Video Blocked</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #ff0000 0%, #cc0000 100%);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        .container {{
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }}
+        .emoji {{
+            font-size: 80px;
+            margin-bottom: 20px;
+        }}
+        h1 {{
+            color: #333;
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }}
+        .channel {{
+            color: #666;
+            font-size: 16px;
+            margin: 10px 0 20px 0;
+        }}
+        p {{
+            color: #666;
+            line-height: 1.6;
+            margin: 20px 0;
+        }}
+        .note {{
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 20px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="emoji">📺</div>
+        <h1>YouTube Video Blocked</h1>
+        <div class="channel">{channel_info}</div>
+        <p>This YouTube channel is not in your allowed list. Only videos from approved channels can be played.</p>
+        <div class="note">
+            <strong>Tip:</strong> Ask your administrator to add this channel if you need access.
+        </div>
+    </div>
+</body>
+</html>"""

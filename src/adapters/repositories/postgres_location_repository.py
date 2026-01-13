@@ -4,8 +4,8 @@ import logging
 import psycopg
 from psycopg.rows import dict_row
 
-from domain.entities import Location
-from domain.value_objects import LocationData
+from domain.entities import Location, BlockedZone
+from domain.value_objects import LocationData, GPSCoordinates
 
 
 class PostgresLocationRepository:
@@ -68,4 +68,32 @@ class PostgresLocationRepository:
                     ]
         except Exception as e:
             logging.error(f"❌ Failed to get locations from database: {e}")
+            return []
+
+    def get_blocked_zones(self) -> List[BlockedZone]:
+        """Load blocked zones from database."""
+        try:
+            with psycopg.connect(self._connection_string, row_factory=dict_row) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT name, latitude, longitude, radius_meters
+                           FROM blocked_locations
+                           WHERE enabled = true"""
+                    )
+                    rows = cursor.fetchall()
+                    zones = [
+                        BlockedZone(
+                            coordinates=GPSCoordinates(
+                                latitude=float(row['latitude']),
+                                longitude=float(row['longitude'])
+                            ),
+                            radius_meters=float(row['radius_meters']),
+                            name=row['name']
+                        )
+                        for row in rows
+                    ]
+                    logging.info(f"✅ Loaded {len(zones)} blocked zones from database")
+                    return zones
+        except Exception as e:
+            logging.error(f"❌ Failed to load blocked zones from database: {e}")
             return []

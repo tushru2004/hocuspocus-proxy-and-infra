@@ -1,10 +1,10 @@
 """Configuration management."""
 import os
+import logging
 from dataclasses import dataclass
 from typing import List
 
 from domain.entities import BlockedZone
-from domain.value_objects import GPSCoordinates
 
 
 @dataclass
@@ -54,22 +54,16 @@ class AppConfig:
     @classmethod
     def load(cls) -> 'AppConfig':
         """Load application configuration."""
-        # Load blocked zones from constants
-        blocked_zones = [
-            BlockedZone(
-                coordinates=GPSCoordinates(latitude=48.1785, longitude=16.4207),
-                radius_meters=100,
-                name='Mautner-Markhof-Gasse 11/11, Vienna, Austria, 1110'
-            ),
-            BlockedZone(
-                coordinates=GPSCoordinates(latitude=48.20028, longitude=16.36116),
-                radius_meters=100,
-                name='Phil Cafe, Gumpendorfer Str. 10-12, 1060 Wien'
-            )
-        ]
+        from adapters.repositories import PostgresLocationRepository
+
+        db_config = DatabaseConfig.from_env()
+
+        # Load blocked zones from database
+        location_repo = PostgresLocationRepository(db_config.connection_string)
+        blocked_zones = location_repo.get_blocked_zones()
 
         return cls(
-            database=DatabaseConfig.from_env(),
+            database=db_config,
             youtube=YouTubeConfig.from_env(),
             blocked_zones=blocked_zones
         )

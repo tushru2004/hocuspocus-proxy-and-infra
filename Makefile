@@ -1,4 +1,4 @@
-.PHONY: help startgcvpn stopgcvpn status pods logs cost
+.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -23,6 +23,18 @@ help:
 	@echo "VPN:"
 	@echo "  make vpn-ip        - Get VPN LoadBalancer IP"
 	@echo "  make vpn-status    - Check VPN connection status"
+	@echo ""
+	@echo "E2E Testing:"
+	@echo "  make test-e2e         - Run all E2E tests"
+	@echo "  make test-e2e-flows   - Run proxy flow tests only"
+	@echo "  make test-e2e-overlay - Run location overlay tests only"
+	@echo "  make test-e2e-smoke   - Run smoke tests (quick check)"
+	@echo "  make test-e2e-setup   - First-time WebDriverAgent setup"
+	@echo "  make test-e2e-install - Install test dependencies"
+	@echo ""
+	@echo "Development:"
+	@echo "  make build-push       - Build and push mitmproxy image"
+	@echo "  make deploy-mitmproxy - Build, push, and restart mitmproxy"
 	@echo ""
 	@echo "Infrastructure:"
 	@echo "  make init          - Initialize Terraform"
@@ -203,15 +215,71 @@ cost:
 # Development
 # ============================================================================
 
+REGISTRY := europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn
+PLATFORM := linux/amd64
+
 build-local:
-	docker build -t hocuspocus-vpn/mitmproxy:latest -f docker/mitmproxy/Dockerfile .
-	docker build -t hocuspocus-vpn/vpn:latest -f docker/vpn/Dockerfile docker/vpn/
+	docker build --platform $(PLATFORM) -t hocuspocus-vpn/mitmproxy:latest -f docker/mitmproxy/Dockerfile .
+	docker build --platform $(PLATFORM) -t hocuspocus-vpn/vpn:latest -f docker/vpn/Dockerfile docker/vpn/
+
+build-push: ## Build and push mitmproxy image to Artifact Registry
+	docker build --platform $(PLATFORM) -t $(REGISTRY)/mitmproxy:latest -f docker/mitmproxy/Dockerfile .
+	docker push $(REGISTRY)/mitmproxy:latest
 
 deploy:
 	kubectl apply -k k8s/
+
+deploy-mitmproxy: build-push ## Build, push, and restart mitmproxy
+	kubectl rollout restart deployment mitmproxy -n $(NAMESPACE)
+	kubectl rollout status deployment mitmproxy -n $(NAMESPACE) --timeout=90s
 
 restart-vpn:
 	kubectl rollout restart daemonset vpn-server -n $(NAMESPACE)
 
 restart-mitmproxy:
 	kubectl rollout restart deployment mitmproxy -n $(NAMESPACE)
+
+# ============================================================================
+# E2E Testing
+# ============================================================================
+
+# Prerequisites:
+#   1. iPhone connected via USB with VPN profile installed and connected
+#   2. Appium running: appium (in separate terminal)
+#   3. Virtual environment: make test-e2e-install
+#   4. GKE cluster running: make startgcvpn
+
+# Python/pytest from virtual environment
+VENV := .venv
+PYTEST := $(VENV)/bin/pytest
+PYTHON := $(VENV)/bin/python
+
+.PHONY: test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup
+
+test-e2e: ## Run all E2E tests (requires Appium + connected iPhone)
+	@echo "Running E2E tests..."
+	@echo "Prerequisites: Appium running + iPhone connected + GKE VPN started"
+	cd tests/e2e && $(CURDIR)/$(PYTEST) -v --tb=short
+
+test-e2e-flows: ## Run main proxy flow tests only
+	cd tests/e2e && $(CURDIR)/$(PYTEST) test_ios_flows.py -v --tb=short
+
+test-e2e-overlay: ## Run location overlay tests only
+	cd tests/e2e && $(CURDIR)/$(PYTEST) test_location_overlay.py -v --tb=short
+
+test-e2e-smoke: ## Run smoke tests only (quick connectivity check)
+	cd tests/e2e && $(CURDIR)/$(PYTEST) test_smoke.py -v --tb=short
+
+test-e2e-setup: ## Build and install WebDriverAgent (first-time setup)
+	@echo "Building WebDriverAgent for real device..."
+	@echo "This will compile and install WDA on your connected iPhone."
+	cd tests/e2e && USE_PREBUILT_WDA=false $(CURDIR)/$(PYTEST) test_smoke.py -v -k "test_can_connect" --tb=short || true
+	@echo ""
+	@echo "If this failed, you may need to manually set up WDA in Xcode:"
+	@echo "  1. Open: ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj"
+	@echo "  2. Select WebDriverAgentRunner target"
+	@echo "  3. Set Team ID and Bundle ID (com.hocuspocus.WebDriverAgentRunner)"
+	@echo "  4. Build and run on your iPhone (Cmd+U)"
+
+test-e2e-install: ## Install E2E test dependencies
+	$(PYTHON) -m pip install -r tests/e2e/requirements.txt

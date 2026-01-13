@@ -45,3 +45,17 @@ output "kubectl_config_command" {
   description = "Command to configure kubectl"
   value       = "gcloud container clusters get-credentials ${google_container_cluster.primary.name} --zone ${var.zone} --project ${var.project_id}"
 }
+
+# =============================================================================
+# Certificate Storage Outputs
+# =============================================================================
+
+output "certificate_bucket" {
+  description = "GCS bucket for certificate persistence"
+  value       = google_storage_bucket.certificates.name
+}
+
+output "cert_sync_service_account" {
+  description = "Service account email for certificate sync"
+  value       = google_service_account.cert_sync.email
+}

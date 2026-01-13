@@ -119,3 +119,55 @@ resource "google_artifact_registry_repository" "vpn_repo" {
   description   = "Docker repository for Hocuspocus VPN images"
   format        = "DOCKER"
 }
+
+# =============================================================================
+# GCS Bucket for Certificate Persistence
+# =============================================================================
+
+resource "google_storage_bucket" "certificates" {
+  name          = "${var.project_id}-vpn-certs"
+  location      = var.region
+  force_destroy = false  # Protect certificates from accidental deletion
+
+  uniform_bucket_level_access = true
+
+  versioning {
+    enabled = true
+  }
+
+  lifecycle_rule {
+    condition {
+      num_newer_versions = 5
+    }
+    action {
+      type = "Delete"
+    }
+  }
+}
+
+# Service account for certificate access
+resource "google_service_account" "cert_sync" {
+  account_id   = "cert-sync"
+  display_name = "Certificate Sync Service Account"
+  description  = "Service account for syncing certificates to/from GCS"
+}
+
+# Grant service account access to the bucket
+resource "google_storage_bucket_iam_member" "cert_sync_admin" {
+  bucket = google_storage_bucket.certificates.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.cert_sync.email}"
+}
+
+# Allow GKE workloads to impersonate the service account
+resource "google_service_account_iam_member" "workload_identity_mitmproxy" {
+  service_account_id = google_service_account.cert_sync.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[hocuspocus/mitmproxy]"
+}
+
+resource "google_service_account_iam_member" "workload_identity_vpn" {
+  service_account_id = google_service_account.cert_sync.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[hocuspocus/vpn-server]"
+}

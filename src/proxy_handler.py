@@ -57,6 +57,9 @@ class ProxyHandler:
         # Captive portal tracking
         self.redirect_tracker = {}
 
+        # Track recently approved YouTube video IDs for googlevideo.com correlation
+        self._approved_video_ids: set[str] = set()
+
     def request(self, flow):
         """Handle incoming requests."""
         self.num += 1
@@ -66,6 +69,11 @@ class ProxyHandler:
         # Handle location tracking endpoint
         if flow.request.path == "/__track_location__" and flow.request.method == "POST":
             self._handle_location_tracking(flow)
+            return
+
+        # Handle YouTube video check endpoint (for SPA blocking overlay)
+        if flow.request.path.startswith("/__check_youtube_video__"):
+            self._handle_youtube_video_check(flow)
             return
 
         full_host = flow.request.host
@@ -86,18 +94,85 @@ class ProxyHandler:
             if self.check_youtube_access.is_enabled and 'youtube.com' in full_hostname:
                 youtube_url = self._build_full_url(flow)
                 logging.info(f"🔍 Checking YouTube URL: {youtube_url}")
+
+                # Extract video ID early to detect video switches
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(youtube_url)
+                query = parse_qs(parsed.query)
+                current_video_id = query.get('v', query.get('docid', [None]))[0]
+
+                # If we see a NEW video ID, clear old approvals BEFORE checking
+                # This prevents race conditions where googlevideo loads before blocking
+                if current_video_id and current_video_id not in self._approved_video_ids:
+                    if self._approved_video_ids:
+                        logging.info(f"🔄 New video {current_video_id} detected, clearing old approvals: {self._approved_video_ids}")
+                        self._approved_video_ids.clear()
+
                 youtube_decision = self.check_youtube_access.execute(youtube_url)
 
                 if not youtube_decision.allowed:
                     logging.info("🚫 BLOCKING YouTube video (channel not whitelisted)")
+                    # Clear approved videos when blocking - user switched to non-whitelisted content
+                    self._approved_video_ids.clear()
+                    logging.info("🗑️ Cleared approved video IDs")
+                    block_page = self.block_page_renderer.render_youtube_block_page()
                     flow.response = http.Response.make(
                         403,
-                        b"Access denied: This YouTube channel is not allowed",
-                        {"Content-Type": "text/plain"}
+                        block_page.encode('utf-8'),
+                        {"Content-Type": "text/html; charset=utf-8"}
                     )
                     return
                 else:
+                    # Track approved video ID for googlevideo.com correlation
+                    if "whitelisted" in youtube_decision.message and current_video_id:
+                        self._approved_video_ids.add(current_video_id)
+                        logging.info(f"📝 Tracking approved video ID: {current_video_id}")
                     logging.info(f"✅ YouTube check passed: {youtube_url}")
+
+            # Special handling for googlevideo.com (YouTube CDN)
+            if self.check_youtube_access.is_enabled and 'googlevideo.com' in full_hostname:
+                referer = flow.request.headers.get("Referer", "")
+                logging.info(f"🔍 Checking googlevideo.com request (Referer: {referer})")
+
+                if referer and 'youtube.com' in referer:
+                    # Try to extract video ID from referer and check channel
+                    youtube_decision = self.check_youtube_access.execute(referer)
+
+                    if "Not a YouTube video URL" in youtube_decision.message:
+                        # Couldn't extract video ID from referer
+                        # Allow if we have approved videos (set when youtube.com/watch was allowed)
+                        if self._approved_video_ids:
+                            logging.info(f"✅ googlevideo.com allowed ({len(self._approved_video_ids)} approved videos)")
+                        else:
+                            logging.info("🚫 BLOCKING googlevideo.com (no approved videos)")
+                            block_page = self.block_page_renderer.render_youtube_block_page()
+                            flow.response = http.Response.make(
+                                403,
+                                block_page.encode('utf-8'),
+                                {"Content-Type": "text/html; charset=utf-8"}
+                            )
+                            return
+                    elif not youtube_decision.allowed:
+                        logging.info("🚫 BLOCKING googlevideo.com (YouTube channel not whitelisted)")
+                        block_page = self.block_page_renderer.render_youtube_block_page()
+                        flow.response = http.Response.make(
+                            403,
+                            block_page.encode('utf-8'),
+                            {"Content-Type": "text/html; charset=utf-8"}
+                        )
+                        return
+                    else:
+                        logging.info(f"✅ googlevideo.com allowed (channel whitelisted via Referer)")
+                else:
+                    # No referer or not from youtube - block by default when filtering is enabled
+                    logging.info("🚫 BLOCKING googlevideo.com (no YouTube Referer to verify channel)")
+                    block_page = self.block_page_renderer.render_youtube_block_page()
+                    flow.response = http.Response.make(
+                        403,
+                        block_page.encode('utf-8'),
+                        {"Content-Type": "text/html; charset=utf-8"}
+                    )
+                    return
 
             logging.info(f"✅ Allowing: {full_hostname} (host: {full_host})")
         else:
@@ -118,6 +193,9 @@ class ProxyHandler:
 
         # Inject location tracking JavaScript into HTML responses
         self._inject_location_tracking_script(flow)
+
+        # Inject YouTube video blocking script for SPA navigation
+        self._inject_youtube_blocking_script(flow)
 
         # Detect captive portals
         self._detect_captive_portal(flow)
@@ -184,6 +262,64 @@ class ProxyHandler:
                 {"Content-Type": "application/json"}
             )
 
+    def _handle_youtube_video_check(self, flow):
+        """Handle YouTube video check endpoint for SPA blocking overlay."""
+        try:
+            from urllib.parse import urlparse, parse_qs
+
+            # Extract video ID from query string
+            parsed = urlparse(flow.request.path)
+            query = parse_qs(parsed.query)
+            video_id = query.get('v', [None])[0]
+
+            if not video_id:
+                flow.response = http.Response.make(
+                    200,
+                    json.dumps({"blocked": False, "reason": "no video ID"}).encode('utf-8'),
+                    {"Content-Type": "application/json"}
+                )
+                return
+
+            # Check if YouTube filtering is enabled
+            if not self.check_youtube_access.is_enabled:
+                flow.response = http.Response.make(
+                    200,
+                    json.dumps({"blocked": False, "reason": "filtering disabled"}).encode('utf-8'),
+                    {"Content-Type": "application/json"}
+                )
+                return
+
+            # Check video access using the YouTube use case
+            fake_url = f"https://www.youtube.com/watch?v={video_id}"
+            decision = self.check_youtube_access.execute(fake_url)
+
+            blocked = not decision.allowed
+            logging.info(f"📺 YouTube video check: {video_id} -> {'BLOCKED' if blocked else 'ALLOWED'}")
+
+            # Update approved video tracking
+            if decision.allowed and "whitelisted" in decision.message:
+                self._approved_video_ids.add(video_id)
+            elif blocked:
+                self._approved_video_ids.discard(video_id)
+
+            flow.response = http.Response.make(
+                200,
+                json.dumps({
+                    "blocked": blocked,
+                    "video_id": video_id,
+                    "reason": decision.message
+                }).encode('utf-8'),
+                {"Content-Type": "application/json"}
+            )
+
+        except Exception as e:
+            logging.error(f"❌ Error checking YouTube video: {e}")
+            flow.response = http.Response.make(
+                200,
+                json.dumps({"blocked": False, "error": str(e)}).encode('utf-8'),
+                {"Content-Type": "application/json"}
+            )
+
     def _should_block_due_to_location(self, host: str) -> bool:
         """Check if request should be blocked due to location."""
         # Always allow essential hosts
@@ -238,16 +374,20 @@ class ProxyHandler:
             return (full_host, base_domain)
 
     def _build_full_url(self, flow) -> str:
-        """Build full URL from flow."""
-        full_url = f"{flow.request.scheme}://{flow.request.host}{flow.request.path}"
-        if flow.request.query:
-            query_string = urlencode(flow.request.query.fields)
-            full_url += f"?{query_string}"
-        return full_url
+        """Build full URL from flow.
+
+        Uses mitmproxy's built-in pretty_url to avoid URL mangling issues
+        where query parameters were being duplicated (e.g., ?v=X?v=X).
+        """
+        return flow.request.pretty_url
 
     def _inject_location_tracking_script(self, flow):
         """Inject location tracking JavaScript into HTML responses."""
-        # Skip injection for essential/auth domains
+        # Skip injection entirely if no blocked zones are configured
+        if not self.verify_location.has_blocked_zones:
+            return
+
+        # Skip injection for essential/auth domains (to avoid breaking login flows)
         essential_domains = [
             "accounts.google.com",
             "apple.com",
@@ -355,7 +495,18 @@ class ProxyHandler:
 </div>
 <script>
 (function() {
+    // Check if location was already tracked this session
+    var locationTracked = sessionStorage.getItem('locationTracked');
     var overlay = document.getElementById('location-permission-overlay');
+
+    if (locationTracked === 'true') {
+        // Already tracked - hide overlay immediately
+        if (overlay) {
+            overlay.style.display = 'none';
+        }
+        return;
+    }
+
     var status = document.getElementById('location-status');
     var buttons = document.getElementById('location-buttons');
     var continueBtn = document.getElementById('continue-btn');
@@ -369,6 +520,12 @@ class ProxyHandler:
         if (promptTimeout) {
             clearTimeout(promptTimeout);
         }
+    }
+
+    function markLocationTracked() {
+        try {
+            sessionStorage.setItem('locationTracked', 'true');
+        } catch(e) {}
     }
 
     function showError(message, showContinue) {
@@ -388,6 +545,7 @@ class ProxyHandler:
     // Add click handler for continue button
     if (continueBtn) {
         continueBtn.addEventListener('click', function() {
+            markLocationTracked();
             hideOverlay();
         });
     }
@@ -425,9 +583,11 @@ class ProxyHandler:
                 if (json.blocked) {
                     document.body.innerHTML = json.block_page;
                 } else {
+                    markLocationTracked();
                     hideOverlay();
                 }
             }).catch(function(err) {
+                markLocationTracked();
                 hideOverlay();
             });
         }, function(error) {
@@ -470,6 +630,168 @@ class ProxyHandler:
 
             except Exception as e:
                 logging.error(f"❌ Error injecting location script: {e}")
+
+    def _inject_youtube_blocking_script(self, flow):
+        """Inject JavaScript into YouTube pages to show block overlay for SPA navigation."""
+        # Only inject if YouTube filtering is enabled
+        if not self.check_youtube_access.is_enabled:
+            return
+
+        # Only inject into YouTube HTML responses
+        # Check both host and SNI (host might be IP address)
+        full_host = flow.request.host
+        sni_host = flow.client_conn.sni if hasattr(flow.client_conn, 'sni') and flow.client_conn.sni else None
+
+        is_youtube = 'youtube.com' in full_host or (sni_host and 'youtube.com' in sni_host)
+        if not is_youtube:
+            return
+
+        content_type = flow.response.headers.get("content-type", "")
+        if "text/html" not in content_type or flow.response.status_code != 200:
+            return
+
+        try:
+            youtube_block_script = """
+<script>
+(function() {
+    // YouTube Video Blocking Script - handles SPA navigation
+    var blockOverlayId = 'yt-video-block-overlay';
+    var lastCheckedVideoId = null;
+
+    function getVideoIdFromUrl(url) {
+        try {
+            var urlObj = new URL(url, window.location.origin);
+            return urlObj.searchParams.get('v');
+        } catch(e) {
+            return null;
+        }
+    }
+
+    function showBlockOverlay() {
+        if (document.getElementById(blockOverlayId)) return;
+
+        var overlay = document.createElement('div');
+        overlay.id = blockOverlayId;
+        overlay.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: linear-gradient(135deg, #ff0000 0%, #cc0000 100%);
+                z-index: 999999;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            ">
+                <div style="
+                    background: white;
+                    border-radius: 20px;
+                    padding: 40px;
+                    max-width: 500px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    text-align: center;
+                ">
+                    <div style="font-size: 80px; margin-bottom: 20px;">📺</div>
+                    <h1 style="color: #333; margin: 0 0 10px 0; font-size: 28px;">YouTube Video Blocked</h1>
+                    <p style="color: #666; line-height: 1.6; margin: 20px 0;">
+                        This YouTube channel is not in your allowed list. Only videos from approved channels can be played.
+                    </p>
+                    <button onclick="window.history.back()" style="
+                        background: #667eea;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        font-size: 16px;
+                        cursor: pointer;
+                        margin-top: 10px;
+                    ">Go Back</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    function hideBlockOverlay() {
+        var overlay = document.getElementById(blockOverlayId);
+        if (overlay) {
+            overlay.remove();
+        }
+    }
+
+    function checkVideoAccess(videoId) {
+        if (!videoId || videoId === lastCheckedVideoId) return;
+        lastCheckedVideoId = videoId;
+
+        // Check video access via special endpoint
+        fetch('/__check_youtube_video__?v=' + encodeURIComponent(videoId), {
+            method: 'GET',
+            credentials: 'same-origin'
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.blocked) {
+                showBlockOverlay();
+            } else {
+                hideBlockOverlay();
+            }
+        })
+        .catch(function(err) {
+            // On error, don't show overlay (fail open)
+            console.log('Video check error:', err);
+        });
+    }
+
+    function handleUrlChange() {
+        var videoId = getVideoIdFromUrl(window.location.href);
+        if (videoId) {
+            checkVideoAccess(videoId);
+        } else {
+            hideBlockOverlay();
+            lastCheckedVideoId = null;
+        }
+    }
+
+    // Monitor URL changes
+    var originalPushState = history.pushState;
+    history.pushState = function() {
+        originalPushState.apply(this, arguments);
+        setTimeout(handleUrlChange, 100);
+    };
+
+    var originalReplaceState = history.replaceState;
+    history.replaceState = function() {
+        originalReplaceState.apply(this, arguments);
+        setTimeout(handleUrlChange, 100);
+    };
+
+    window.addEventListener('popstate', function() {
+        setTimeout(handleUrlChange, 100);
+    });
+
+    // Check on initial load
+    setTimeout(handleUrlChange, 500);
+})();
+</script>
+"""
+            html = flow.response.text
+
+            # Inject before </body> or </html> tag
+            if "</body>" in html:
+                html = html.replace("</body>", youtube_block_script + "</body>")
+            elif "</html>" in html:
+                html = html.replace("</html>", youtube_block_script + "</html>")
+            else:
+                html += youtube_block_script
+
+            flow.response.text = html
+            logging.info("📺 Injected YouTube blocking script")
+
+        except Exception as e:
+            logging.error(f"❌ Error injecting YouTube blocking script: {e}")
 
     def _detect_captive_portal(self, flow):
         """Detect and auto-whitelist captive portals."""
