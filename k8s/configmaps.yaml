@@ -82,6 +82,20 @@ data:
 
     CREATE INDEX IF NOT EXISTS idx_blocked_locations_enabled ON blocked_locations(enabled);
 
+    -- Junction table for per-location domain whitelist
+    -- Each blocked location can have its own list of allowed domains
+    CREATE TABLE IF NOT EXISTS blocked_location_whitelist (
+        id SERIAL PRIMARY KEY,
+        blocked_location_id INTEGER NOT NULL REFERENCES blocked_locations(id) ON DELETE CASCADE,
+        domain VARCHAR(255) NOT NULL,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(blocked_location_id, domain)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_location_whitelist_location ON blocked_location_whitelist(blocked_location_id);
+    CREATE INDEX IF NOT EXISTS idx_location_whitelist_domain ON blocked_location_whitelist(domain);
+
     -- Insert default allowed hosts
     INSERT INTO allowed_hosts (domain, enabled)
     VALUES

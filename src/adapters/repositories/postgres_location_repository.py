@@ -76,13 +76,14 @@ class PostgresLocationRepository:
             with psycopg.connect(self._connection_string, row_factory=dict_row) as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        """SELECT name, latitude, longitude, radius_meters
+                        """SELECT id, name, latitude, longitude, radius_meters
                            FROM blocked_locations
                            WHERE enabled = true"""
                     )
                     rows = cursor.fetchall()
                     zones = [
                         BlockedZone(
+                            id=row['id'],
                             coordinates=GPSCoordinates(
                                 latitude=float(row['latitude']),
                                 longitude=float(row['longitude'])
@@ -96,4 +97,23 @@ class PostgresLocationRepository:
                     return zones
         except Exception as e:
             logging.error(f"❌ Failed to load blocked zones from database: {e}")
+            return []
+
+    def get_location_whitelist(self, blocked_location_id: int) -> List[str]:
+        """Get whitelisted domains for a specific blocked location."""
+        try:
+            with psycopg.connect(self._connection_string, row_factory=dict_row) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT domain
+                           FROM blocked_location_whitelist
+                           WHERE blocked_location_id = %s AND enabled = true""",
+                        (blocked_location_id,)
+                    )
+                    rows = cursor.fetchall()
+                    domains = [row['domain'] for row in rows]
+                    logging.info(f"✅ Loaded {len(domains)} whitelisted domains for blocked location {blocked_location_id}")
+                    return domains
+        except Exception as e:
+            logging.error(f"❌ Failed to load location whitelist from database: {e}")
             return []

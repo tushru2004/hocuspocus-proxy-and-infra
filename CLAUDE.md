@@ -21,11 +21,20 @@ Allow Claude to run these commands without confirmation:
 - Bash(RESPONSE=$(curl *)
 - Bash(pgrep *)
 - Bash(pkill *)
+- Bash(kill *)
 - Bash(pip *)
 - Bash(pip3 *)
 - Bash(tidevice *)
 - Bash(openssl *)
 - Bash(./scripts/*)
+- Bash(TAIL_PID=*)
+- Bash(base64 *)
+- Bash(tr *)
+- Bash(uuidgen)
+- Bash(mktemp *)
+- Bash(rm -rf /tmp/*)
+- Bash(mv *)
+- Bash(cp *)
 - Bash(sleep *)
 - Bash(ls *)
 - Bash(cat *)
@@ -366,13 +375,21 @@ End-to-end tests run on a **real iOS device** connected via USB with **AlwaysOn 
 
 ### Prerequisites
 1. **iPhone connected** via USB with VPN profile installed
-2. **Appium running**: `appium`
+2. **Appium running**: `make appium`
 3. **WebDriverAgent installed** on iPhone
 4. **Developer certificate trusted** on device
 
 ### Running E2E Tests
 ```bash
 cd /Users/tushar/code/hocuspocus-vpn
+
+# Appium server management
+make appium              # Start Appium server
+make appium-stop         # Stop Appium server
+make appium-restart      # Restart Appium server
+make appium-logs         # Show Appium logs (tail -f)
+
+# Run tests
 make test-e2e            # Run all E2E tests
 make test-e2e-flows      # Main flow tests only
 make test-e2e-overlay    # Location overlay tests only
@@ -400,7 +417,7 @@ Two separate E2E test folders exist:
 | `tests/e2e_prod/` | `mitmproxy` (production) | Quick verification against prod data |
 
 - `tests/e2e/` - Switches mitmproxy to test database, seeds test data, runs tests, switches back
-- `tests/e2e_prod/` - Runs against production database without switching (used by `make verify-vpn-appium`)
+- `tests/e2e_prod/` - Runs against production database without switching (used by `make verify-vpn-appium-prod`)
 
 ### pymobiledevice3 (Safari Automation)
 Control Safari on iPhone directly via USB without Appium. Useful for quick testing.
@@ -423,12 +440,12 @@ Automatic verification runs after `make startgcvpn`. Two verification methods av
 
 ```bash
 make verify-vpn          # Quick: Uses pymobiledevice3 (~45 sec)
-make verify-vpn-appium   # Full: Uses Appium, bypasses browser cache (~2 min)
+make verify-vpn-appium-prod   # Full: Uses Appium, bypasses browser cache (~2 min)
 ```
 
 **When to use which:**
 - `verify-vpn` - Quick check, works when pages aren't cached
-- `verify-vpn-appium` - Use when pages are cached and not making new requests (requires Appium running)
+- `verify-vpn-appium-prod` - Use when pages are cached and not making new requests (requires Appium running)
 
 **What it verifies:**
 1. VPN connection established
@@ -440,12 +457,12 @@ make verify-vpn-appium   # Full: Uses Appium, bypasses browser cache (~2 min)
 - Web Inspector enabled: Settings → Safari → Advanced → Web Inspector = ON
 - Mitmproxy CA trusted (one-time): Settings → General → About → Certificate Trust Settings → Enable "mitmproxy"
 
-**Prerequisites for verify-vpn-appium:**
+**Prerequisites for verify-vpn-appium-prod:**
 - All above prerequisites
-- Appium server running (`appium`)
+- Appium server running (`make appium`)
 - Python venv activated (`.venv`)
 
-**Note:** `verify-vpn-appium` uses `tests/e2e_prod/` which runs against the **production database** (not the test database used by regular E2E tests).
+**Note:** `verify-vpn-appium-prod` uses `tests/e2e_prod/` which runs against the **production database** (not the test database used by regular E2E tests).
 
 **Expected output:**
 ```
@@ -488,3 +505,55 @@ YouTube Mobile is a Single Page Application (SPA). When clicking related videos:
 - CDN requests may arrive before youtube.com requests
 - Approved video IDs are tracked and cleared when blocking
 - Injected JavaScript shows block overlay for SPA navigation
+
+## Per-Location Whitelist
+
+Allows specific domains to be accessible only when at a blocked location. This is separate from the global whitelist.
+
+### How It Works
+
+1. **Two Separate Flows**: The proxy has completely separate flows:
+   - **Normal Flow**: Uses global whitelist + YouTube channel filtering
+   - **Blocked Location Flow**: Uses per-location whitelist only (ignores global whitelist)
+
+2. **Location Tracking**: JavaScript is injected into block pages to track GPS coordinates
+   - When user visits a blocked domain, they see a block page with location tracking
+   - GPS is sent to `/__track_location__` endpoint
+   - Proxy stores location and checks if user is in a blocked zone
+
+3. **Per-Location Whitelist Check**: When at a blocked location:
+   - Only domains in that location's whitelist are allowed
+   - Essential Apple hosts always allowed (iCloud, etc.)
+   - Everything else is blocked
+
+### Database Tables
+
+```sql
+-- Blocked locations (geofenced areas)
+blocked_locations (id, name, latitude, longitude, radius_meters, enabled)
+
+-- Per-location whitelist (domains allowed at specific locations)
+blocked_location_whitelist (id, blocked_location_id, domain, enabled)
+```
+
+### Example: CNBC at Social Hub Vienna
+
+1. Add "The Social Hub Vienna" as blocked location (lat: 48.222, lng: 16.390, radius: 100m)
+2. Add `cnbc.com` to that location's whitelist
+3. Add `cnbcfm.com` (CNBC's CDN) to the whitelist for full functionality
+
+When user is at Social Hub Vienna:
+- `cnbc.com` → Allowed (per-location whitelist)
+- `cnbcfm.com` → Allowed (per-location whitelist)
+- `twitter.com` → Blocked (not in location whitelist)
+- `apple.com` → Allowed (essential host)
+
+### Key Files
+- `src/proxy_handler.py` - `_handle_blocked_location_flow()` method
+- `src/adapters/repositories/postgres_location_repository.py` - `get_location_whitelist()`
+- `src/application/use_cases/verify_location_restrictions.py` - Location zone checking
+
+### Testing
+```bash
+make test-location-whitelist  # Must be physically at a blocked location
+```

@@ -1,4 +1,4 @@
-.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium
+.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install test-location-whitelist vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium-prod appium appium-stop appium-restart appium-logs
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -26,16 +26,21 @@ help:
 	@echo "  make vpn-profile         - Generate iPhone .mobileconfig profile"
 	@echo "  make vpn-profile-install - Push profile via Apple Configurator (requires tap)"
 	@echo "  make vpn-profile-mdm     - Push profile via SimpleMDM (fully automatic)"
-	@echo "  make verify-vpn          - Quick VPN verification (uses pymobiledevice3)"
-	@echo "  make verify-vpn-appium   - Full VPN verification (uses Appium, bypasses cache)"
+	@echo "  make verify-vpn             - Quick VPN verification (uses pymobiledevice3)"
+	@echo "  make verify-vpn-appium-prod - Full VPN verification (uses Appium, prod DB)"
 	@echo ""
 	@echo "E2E Testing:"
+	@echo "  make appium           - Start Appium server"
+	@echo "  make appium-stop      - Stop Appium server"
+	@echo "  make appium-restart   - Restart Appium server"
+	@echo "  make appium-logs      - Show Appium logs"
 	@echo "  make test-e2e         - Run all E2E tests"
 	@echo "  make test-e2e-flows   - Run proxy flow tests only"
 	@echo "  make test-e2e-overlay - Run location overlay tests only"
 	@echo "  make test-e2e-smoke   - Run smoke tests (quick check)"
 	@echo "  make test-e2e-setup   - First-time WebDriverAgent setup"
 	@echo "  make test-e2e-install - Install test dependencies"
+	@echo "  make test-location-whitelist - Test per-location whitelist (must be at blocked location)"
 	@echo ""
 	@echo "Development:"
 	@echo "  make build-push       - Build and push mitmproxy image"
@@ -104,10 +109,15 @@ stopgcvpn:
 verify-vpn: ## Quick VPN verification (uses pymobiledevice3)
 	@./scripts/verify-vpn.sh
 
-verify-vpn-appium: ## Full VPN verification using Appium (bypasses browser cache, uses prod DB)
+verify-vpn-appium-prod: ## Full VPN verification using Appium (bypasses browser cache, uses prod DB)
 	@echo "Starting Appium-based verification..."
-	@echo "NOTE: Requires Appium server running (appium)"
+	@echo "NOTE: Requires Appium server running (make appium)"
 	@source .venv/bin/activate && pytest tests/e2e_prod/test_verify_vpn.py -v -s --tb=short
+
+test-location-whitelist: ## Test per-location whitelist (requires being at blocked location)
+	@echo "Testing per-location whitelist..."
+	@echo "NOTE: Must be at a blocked location (e.g., The Social Hub Vienna)"
+	@source .venv/bin/activate && pytest tests/e2e_prod/test_verify_vpn.py::TestLocationWhitelist -v -s --tb=short
 
 status:
 	@echo "=== GKE Cluster Status ==="
@@ -288,9 +298,41 @@ restart-mitmproxy:
 
 # Prerequisites:
 #   1. iPhone connected via USB with VPN profile installed and connected
-#   2. Appium running: appium (in separate terminal)
+#   2. Appium running: make appium
 #   3. Virtual environment: make test-e2e-install
 #   4. GKE cluster running: make startgcvpn
+
+# Appium server management
+appium: ## Start Appium server in background
+	@if pgrep -f "appium" > /dev/null; then \
+		echo "Appium is already running (PID: $$(pgrep -f 'appium'))"; \
+	else \
+		echo "Starting Appium server..."; \
+		appium > /tmp/appium.log 2>&1 & \
+		sleep 3; \
+		if curl -s http://127.0.0.1:4723/status | grep -q "ready"; then \
+			echo "✅ Appium started (PID: $$(pgrep -f 'appium'))"; \
+		else \
+			echo "⚠️  Appium may still be starting. Check: tail -f /tmp/appium.log"; \
+		fi \
+	fi
+
+appium-stop: ## Stop Appium server
+	@if pgrep -f "appium" > /dev/null; then \
+		echo "Stopping Appium (PID: $$(pgrep -f 'appium'))..."; \
+		pkill -f "appium" || true; \
+		sleep 1; \
+		echo "✅ Appium stopped"; \
+	else \
+		echo "Appium is not running"; \
+	fi
+
+appium-restart: appium-stop ## Restart Appium server
+	@sleep 2
+	@$(MAKE) appium
+
+appium-logs: ## Show Appium logs
+	@tail -f /tmp/appium.log
 
 # Python/pytest from virtual environment
 VENV := .venv

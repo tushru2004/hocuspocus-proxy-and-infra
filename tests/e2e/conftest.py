@@ -32,6 +32,12 @@ TEST_BLOCKED_LOCATIONS = [
     ("Test School", 37.7749, -122.4194, 500),  # San Francisco - for testing "outside blocked zone"
 ]
 
+# Domains whitelisted for specific blocked locations (per-location whitelist)
+# Format: (blocked_location_name, domain)
+TEST_LOCATION_WHITELIST = [
+    ("Test School", "google.com"),  # google.com allowed at Test School location
+]
+
 
 def _run_kubectl_command(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run a kubectl command."""
@@ -242,6 +248,16 @@ def seed_test_database():
         source_ip VARCHAR(45),
         user_agent TEXT
     );
+    CREATE TABLE IF NOT EXISTS blocked_location_whitelist (
+        id SERIAL PRIMARY KEY,
+        blocked_location_id INTEGER NOT NULL REFERENCES blocked_locations(id) ON DELETE CASCADE,
+        domain VARCHAR(255) NOT NULL,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(blocked_location_id, domain)
+    );
+    CREATE INDEX IF NOT EXISTS idx_location_whitelist_location ON blocked_location_whitelist(blocked_location_id);
+    CREATE INDEX IF NOT EXISTS idx_location_whitelist_domain ON blocked_location_whitelist(domain);
     """
     _run_kubectl_command([
         "exec", "postgres-0", "--",
@@ -272,8 +288,18 @@ def seed_test_database():
     locations_values = ", ".join([f"('{loc[0]}', {loc[1]}, {loc[2]}, {loc[3]}, true)" for loc in TEST_BLOCKED_LOCATIONS])
     locations_sql += locations_values + " ON CONFLICT DO NOTHING;"
 
+    # Build SQL for blocked_location_whitelist (per-location domain whitelist)
+    # Uses subquery to look up blocked_location_id by name
+    location_whitelist_sql = ""
+    for loc_name, domain in TEST_LOCATION_WHITELIST:
+        location_whitelist_sql += f"""
+            INSERT INTO blocked_location_whitelist (blocked_location_id, domain, enabled)
+            SELECT id, '{domain}', true FROM blocked_locations WHERE name = '{loc_name}'
+            ON CONFLICT (blocked_location_id, domain) DO UPDATE SET enabled = true;
+        """
+
     # Execute seeding
-    full_sql = f"{hosts_sql} {channels_sql} {locations_sql}"
+    full_sql = f"{hosts_sql} {channels_sql} {locations_sql} {location_whitelist_sql}"
 
     try:
         result = _run_kubectl_command([

@@ -51,6 +51,9 @@ class ProxyHandler:
         self.store_location_use_case = self.container.get_store_location_use_case()
         self.verify_location = self.container.get_verify_location_restrictions_use_case()
 
+        # Get repositories (for per-location whitelist)
+        self.location_repository = self.container.get_location_repository()
+
         # Get services
         self.block_page_renderer = self.container.get_block_page_renderer()
 
@@ -78,11 +81,18 @@ class ProxyHandler:
 
         full_host = flow.request.host
 
-        # Check location-based blocking first
-        if self._should_block_due_to_location(full_host):
-            self._send_location_block_response(flow)
+        # ================================================================
+        # TWO SEPARATE FLOWS based on location:
+        # 1. BLOCKED LOCATION FLOW - Uses per-location whitelist only
+        # 2. NORMAL FLOW - Uses global whitelist + YouTube channel filtering
+        # ================================================================
+
+        if self.verify_location.is_blocked:
+            # BLOCKED LOCATION FLOW
+            self._handle_blocked_location_flow(flow, full_host)
             return
 
+        # NORMAL FLOW (not at blocked location)
         # Extract full hostname and base domain
         full_hostname, base_domain = self._extract_base_domain(flow)
 
@@ -116,6 +126,7 @@ class ProxyHandler:
                     self._approved_video_ids.clear()
                     logging.info("🗑️ Cleared approved video IDs")
                     block_page = self.block_page_renderer.render_youtube_block_page()
+                    block_page = self._inject_location_script_into_html(block_page)
                     flow.response = http.Response.make(
                         403,
                         block_page.encode('utf-8'),
@@ -146,6 +157,7 @@ class ProxyHandler:
                         else:
                             logging.info("🚫 BLOCKING googlevideo.com (no approved videos)")
                             block_page = self.block_page_renderer.render_youtube_block_page()
+                            block_page = self._inject_location_script_into_html(block_page)
                             flow.response = http.Response.make(
                                 403,
                                 block_page.encode('utf-8'),
@@ -155,6 +167,7 @@ class ProxyHandler:
                     elif not youtube_decision.allowed:
                         logging.info("🚫 BLOCKING googlevideo.com (YouTube channel not whitelisted)")
                         block_page = self.block_page_renderer.render_youtube_block_page()
+                        block_page = self._inject_location_script_into_html(block_page)
                         flow.response = http.Response.make(
                             403,
                             block_page.encode('utf-8'),
@@ -167,6 +180,7 @@ class ProxyHandler:
                     # No referer or not from youtube - block by default when filtering is enabled
                     logging.info("🚫 BLOCKING googlevideo.com (no YouTube Referer to verify channel)")
                     block_page = self.block_page_renderer.render_youtube_block_page()
+                    block_page = self._inject_location_script_into_html(block_page)
                     flow.response = http.Response.make(
                         403,
                         block_page.encode('utf-8'),
@@ -179,6 +193,8 @@ class ProxyHandler:
             # Block
             logging.info(f"🚫 BLOCKING: {base_domain} - {decision.message}")
             block_page = self.block_page_renderer.render_domain_block_page(base_domain)
+            # Inject location tracking script so we can detect if at blocked location
+            block_page = self._inject_location_script_into_html(block_page)
             flow.response = http.Response.make(
                 403,
                 block_page.encode('utf-8'),
@@ -320,16 +336,41 @@ class ProxyHandler:
                 {"Content-Type": "application/json"}
             )
 
-    def _should_block_due_to_location(self, host: str) -> bool:
-        """Check if request should be blocked due to location."""
-        # Always allow essential hosts
-        extracted = tldextract.extract(host)
-        base_domain = f"{extracted.domain}.{extracted.suffix}"
+    def _handle_blocked_location_flow(self, flow, full_host: str) -> None:
+        """Handle requests when user is at a blocked location.
 
+        At blocked locations, we use a COMPLETELY DIFFERENT FLOW:
+        - Only check per-location whitelist (NOT global whitelist)
+        - Allow essential Apple hosts
+        - Block everything else
+
+        This is separate from the normal flow which uses global whitelist
+        and YouTube channel filtering.
+        """
+        blocked_zone_name = self.verify_location.blocked_zone_name or "a blocked location"
+        blocked_zone_id = self.verify_location.blocked_zone_id
+
+        # Extract hostname and base domain (handles IP addresses and SNI)
+        full_hostname, base_domain = self._extract_base_domain(flow)
+        logging.info(f"🔒 Blocked location check: host={full_host}, hostname={full_hostname}, base={base_domain}")
+
+        # 1. Always allow essential Apple hosts (for device functionality)
         essential_hosts = ["apple.com", "icloud.com", "icloud-content.com", "mzstatic.com"]
-        is_essential = any(essential in base_domain for essential in essential_hosts)
+        if any(essential in base_domain for essential in essential_hosts):
+            logging.info(f"✅ ALLOWING {full_hostname} at {blocked_zone_name} (essential host)")
+            return
 
-        return self.verify_location.is_blocked and not is_essential
+        # 2. Check per-location whitelist
+        if blocked_zone_id:
+            whitelisted_domains = self.location_repository.get_location_whitelist(blocked_zone_id)
+            for domain in whitelisted_domains:
+                if domain in full_hostname or domain in base_domain:
+                    logging.info(f"✅ ALLOWING {full_hostname} at {blocked_zone_name} (per-location whitelist: {domain})")
+                    return
+
+        # 3. Block everything else
+        logging.warning(f"🚫 BLOCKED at {blocked_zone_name}: {full_hostname} (base: {base_domain})")
+        self._send_location_block_response(flow)
 
     def _send_location_block_response(self, flow):
         """Send location-based block response."""
@@ -342,6 +383,71 @@ class ProxyHandler:
             block_page.encode('utf-8'),
             {"Content-Type": "text/html; charset=utf-8"}
         )
+
+    def _get_location_tracking_script(self) -> str:
+        """Generate location tracking script for injection into pages."""
+        # Skip if no blocked zones configured
+        if not self.verify_location.has_blocked_zones:
+            return ""
+
+        return """
+<script>
+(function() {
+    // Location tracking script for blocked locations
+    // Skip if already tracked this session
+    if (sessionStorage.getItem('locationTracked') === 'true') return;
+
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(function(position) {
+            var data = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy,
+                altitude: position.coords.altitude,
+                url: window.location.href,
+                timestamp: new Date().toISOString(),
+                device_id: 'iPhone'
+            };
+            fetch('/__track_location__', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            }).then(function(response) {
+                return response.json();
+            }).then(function(json) {
+                sessionStorage.setItem('locationTracked', 'true');
+                if (json.blocked) {
+                    document.body.innerHTML = json.block_page;
+                }
+            }).catch(function(err) {
+                sessionStorage.setItem('locationTracked', 'true');
+            });
+        }, function(error) {
+            // Location error - just mark as tracked
+            sessionStorage.setItem('locationTracked', 'true');
+        }, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        });
+    }
+})();
+</script>
+"""
+
+    def _inject_location_script_into_html(self, html: str) -> str:
+        """Inject location tracking script into HTML content."""
+        script = self._get_location_tracking_script()
+        if not script:
+            return html
+
+        # Inject before </body> or </html> or at end
+        if "</body>" in html:
+            return html.replace("</body>", script + "</body>")
+        elif "</html>" in html:
+            return html.replace("</html>", script + "</html>")
+        else:
+            return html + script
 
     def _extract_base_domain(self, flow) -> tuple[str, str]:
         """
@@ -385,6 +491,13 @@ class ProxyHandler:
         """Inject location tracking JavaScript into HTML responses."""
         # Skip injection entirely if no blocked zones are configured
         if not self.verify_location.has_blocked_zones:
+            return
+
+        # Skip injection if user is already at a blocked location
+        # (we already know their location - no need to track again)
+        # This prevents the tracking script from showing a block page
+        # on domains that were allowed via the per-location whitelist
+        if self.verify_location.is_blocked:
             return
 
         # Skip injection for essential/auth domains (to avoid breaking login flows)

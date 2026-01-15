@@ -91,6 +91,78 @@ class TestVPNVerification:
         print("✅ [TEST] google.com ALLOWED (as expected)")
 
 
+class TestLocationWhitelist:
+    """Test per-location whitelist feature.
+
+    NOTE: These tests only work when physically at a blocked location
+    with the appropriate whitelist configured. Current setup:
+    - Blocked location: "The Social Hub Vienna"
+    - Per-location whitelist: cnbc.com
+    """
+
+    @pytest.mark.timeout(90)
+    def test_location_whitelisted_domain_allowed(self, ios_driver, mitmproxy_logs):
+        """Test that domain in per-location whitelist is allowed at blocked location.
+
+        Prerequisites:
+        - User must be at "The Social Hub Vienna" (or other blocked location)
+        - cnbc.com must be in the per-location whitelist for that location
+        """
+        print("\n📱 [TEST] Testing per-location whitelist...")
+        print("     Prerequisites: Must be at blocked location with cnbc.com whitelisted")
+
+        # First, visit a non-whitelisted site to trigger location tracking
+        cache_bust = int(time.time())
+        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        time.sleep(8)  # Wait for location tracking to complete
+
+        # Check if we're at a blocked location
+        logs = mitmproxy_logs(tail=50)
+        at_blocked_location = "BLOCKING ENABLED - At blocked location" in logs or "BLOCKED at The Social Hub" in logs
+
+        if not at_blocked_location:
+            pytest.skip("Not at a blocked location - skipping per-location whitelist test")
+
+        print("✅ Confirmed at blocked location - testing whitelist...")
+
+        # Now test cnbc.com which should be in the per-location whitelist
+        cache_bust = int(time.time())
+        ios_driver.get(f"https://www.cnbc.com/?_cb={cache_bust}")
+        time.sleep(8)
+
+        logs = mitmproxy_logs(tail=100)
+
+        # Verify cnbc.com was allowed via per-location whitelist
+        whitelist_allowed = "ALLOWING" in logs and "cnbc" in logs.lower() and "per-location whitelist" in logs
+
+        assert whitelist_allowed, \
+            f"cnbc.com was not allowed via per-location whitelist! Check logs:\n{logs[-500:]}"
+
+        print("✅ [TEST] cnbc.com ALLOWED via per-location whitelist (as expected)")
+
+    @pytest.mark.timeout(60)
+    def test_non_whitelisted_domain_blocked_at_location(self, ios_driver, mitmproxy_logs):
+        """Test that non-whitelisted domains are blocked at blocked location."""
+        print("\n📱 [TEST] Testing that non-whitelisted domain is blocked at blocked location...")
+
+        cache_bust = int(time.time())
+        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        time.sleep(8)
+
+        logs = mitmproxy_logs(tail=50)
+
+        # Check if blocked at location (not just domain blocking)
+        blocked_at_location = "BLOCKED at The Social Hub" in logs or "BLOCKED - At" in logs
+
+        if not blocked_at_location:
+            # Check if we got regular domain blocking instead
+            if "BLOCKING non-whitelisted domain" in logs:
+                pytest.skip("Not at blocked location - got regular domain blocking instead")
+            pytest.fail("twitter.com was not blocked!")
+
+        print("✅ [TEST] twitter.com BLOCKED at blocked location (as expected)")
+
+
 class TestVPNQuickCheck:
     """Quick smoke test for VPN - just verifies blocking works."""
 

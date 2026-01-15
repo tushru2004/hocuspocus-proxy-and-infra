@@ -63,6 +63,11 @@ class VerifyLocationRestrictions:
         return self._current_blocked_zone.name if self._current_blocked_zone else None
 
     @property
+    def blocked_zone_id(self) -> Optional[int]:
+        """Get ID of current blocked zone, if any."""
+        return self._current_blocked_zone.id if self._current_blocked_zone else None
+
+    @property
     def has_blocked_zones(self) -> bool:
         """Check if any blocked zones are configured."""
         return len(self._blocked_zones) > 0

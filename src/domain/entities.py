@@ -9,6 +9,7 @@ from .value_objects import GPSCoordinates
 @dataclass
 class BlockedZone:
     """A geographical zone where browsing is blocked."""
+    id: Optional[int]
     coordinates: GPSCoordinates
     radius_meters: float
     name: str
