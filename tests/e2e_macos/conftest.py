@@ -15,8 +15,20 @@ K8S_NAMESPACE = "hocuspocus"
 
 def _run_kubectl_command(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run a kubectl command."""
-    cmd = ["kubectl", "-n", K8S_NAMESPACE] + args
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # Use full path to kubectl and set PATH for gke-gcloud-auth-plugin
+    import os
+    home = os.path.expanduser("~")
+    kubectl_path = os.path.join(home, "bin", "kubectl")
+
+    # Check if ~/bin/kubectl exists, otherwise use system kubectl
+    if not os.path.exists(kubectl_path):
+        kubectl_path = "kubectl"
+
+    env = os.environ.copy()
+    env["PATH"] = f"{home}/bin:{home}/google-cloud-sdk/bin:" + env.get("PATH", "")
+
+    cmd = [kubectl_path, "-n", K8S_NAMESPACE] + args
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
 
 
 @pytest.fixture(scope="session", autouse=True)
