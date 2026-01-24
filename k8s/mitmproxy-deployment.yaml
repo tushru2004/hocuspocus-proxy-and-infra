@@ -23,6 +23,16 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 
+      # Ensure mitmproxy runs on the same node as VPN server
+      # This is required because VPN uses REDIRECT (not DNAT) for iptables
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: vpn-server
+              topologyKey: kubernetes.io/hostname
+
       containers:
         - name: mitmproxy
           image: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn/mitmproxy:latest

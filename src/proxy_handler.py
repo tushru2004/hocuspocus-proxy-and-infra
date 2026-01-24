@@ -509,7 +509,9 @@ class ProxyHandler:
             "mzstatic.com",
             "appleid.apple.com",
             "youtube.com",
-            "googlevideo.com"
+            "googlevideo.com",
+            "chrome.google.com",
+            "chromewebstore.google.com"
         ]
 
         full_host = flow.request.host

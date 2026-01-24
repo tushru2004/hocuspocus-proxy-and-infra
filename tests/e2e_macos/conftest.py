@@ -27,7 +27,8 @@ def _run_kubectl_command(args: list, timeout: int = 30) -> subprocess.CompletedP
     env = os.environ.copy()
     env["PATH"] = f"{home}/bin:{home}/google-cloud-sdk/bin:" + env.get("PATH", "")
 
-    cmd = [kubectl_path, "-n", K8S_NAMESPACE] + args
+    # Add --insecure-skip-tls-verify because mitmproxy intercepts HTTPS to GKE API
+    cmd = [kubectl_path, "-n", K8S_NAMESPACE, "--insecure-skip-tls-verify"] + args
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
 
 

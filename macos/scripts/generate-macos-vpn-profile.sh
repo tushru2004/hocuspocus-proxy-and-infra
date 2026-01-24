@@ -188,7 +188,7 @@ cat > "$PROFILE_PATH" << EOF
                 <key>RemoteIdentifier</key>
                 <string>$VPN_IP</string>
                 <key>LocalIdentifier</key>
-                <string>macos-client</string>
+                <string>vpnclient</string>
                 <key>AuthenticationMethod</key>
                 <string>Certificate</string>
                 <key>PayloadCertificateUUID</key>

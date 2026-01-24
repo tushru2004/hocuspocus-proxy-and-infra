@@ -9,7 +9,12 @@ RUN apk add --no-cache \
     bash \
     curl \
     jq \
-    openssl
+    openssl \
+    python3 \
+    py3-pip
+
+# Install gsutil for GCS cert persistence
+RUN pip3 install --no-cache-dir --break-system-packages gsutil
 
 # Create directories for certificates
 RUN mkdir -p /etc/ipsec.d/cacerts \

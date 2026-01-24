@@ -53,10 +53,13 @@ spec:
               iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
               iptables -A FORWARD -s 10.10.10.0/24 -j ACCEPT
 
-              # Redirect HTTP/HTTPS to mitmproxy
-              # Mitmproxy runs on port 8080 on the host (via hostPort)
-              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 80 -j REDIRECT --to-port 8080
-              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 443 -j REDIRECT --to-port 8080
+              # REDIRECT HTTP/HTTPS to mitmproxy (port 8080 on localhost)
+              # Using REDIRECT (not DNAT) because VPN uses hostNetwork and mitmproxy
+              # runs on the same node - REDIRECT preserves original destination for transparent proxy
+              MITMPROXY_PORT="8080"
+              echo "Redirecting traffic to mitmproxy on port $MITMPROXY_PORT"
+              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 80 -j REDIRECT --to-port $MITMPROXY_PORT
+              iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp --dport 443 -j REDIRECT --to-port $MITMPROXY_PORT
 
               # Block QUIC to force HTTPS fallback
               iptables -I FORWARD -p udp --dport 443 -s 10.10.10.0/24 -j REJECT

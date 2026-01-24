@@ -1,0 +1,249 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: hocuspocus
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: hocuspocus
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: hocuspocus
+data:
+  hocuspocus-logs.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "id": 1,
+          "options": {
+            "dedupStrategy": "none",
+            "enableLogDetails": true,
+            "prettifyLogMessage": false,
+            "showCommonLabels": false,
+            "showLabels": false,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": false
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{app=\"mitmproxy\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "Mitmproxy Logs",
+          "type": "logs"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "id": 2,
+          "options": {
+            "dedupStrategy": "none",
+            "enableLogDetails": true,
+            "prettifyLogMessage": false,
+            "showCommonLabels": false,
+            "showLabels": false,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": false
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{app=\"vpn-server\"}",
+              "refId": "A"
+            }
+          ],
+          "title": "VPN Server Logs",
+          "type": "logs"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 16
+          },
+          "id": 3,
+          "options": {
+            "dedupStrategy": "none",
+            "enableLogDetails": true,
+            "prettifyLogMessage": false,
+            "showCommonLabels": false,
+            "showLabels": false,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": false
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{namespace=\"hocuspocus\"} |= \"BLOCK\"",
+              "refId": "A"
+            }
+          ],
+          "title": "Blocked Requests",
+          "type": "logs"
+        }
+      ],
+      "refresh": "5s",
+      "schemaVersion": 38,
+      "tags": ["hocuspocus", "vpn"],
+      "templating": {
+        "list": []
+      },
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "",
+      "title": "Hocuspocus VPN Logs",
+      "uid": "hocuspocus-logs",
+      "version": 1
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: hocuspocus
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.2.3
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-password
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            - name: storage
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: hocuspocus
+spec:
+  type: LoadBalancer
+  selector:
+    app: grafana
+  ports:
+    - port: 80
+      targetPort: 3000
+      name: http
