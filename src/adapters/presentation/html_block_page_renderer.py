@@ -200,3 +200,87 @@ class HTMLBlockPageRenderer:
     </div>
 </body>
 </html>"""
+
+    def render_no_location_block_page(self) -> str:
+        """Render block page when no location data is available from any device."""
+        return """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Location Required</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        .emoji {
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #ee5a24;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 10px 0 20px 0;
+        }
+        p {
+            color: #666;
+            line-height: 1.6;
+            margin: 20px 0;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 20px;
+            color: #856404;
+        }
+        .note {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="emoji">📍</div>
+        <h1>Location Data Required</h1>
+        <div class="subtitle">No device location received</div>
+        <p>Internet access requires location verification. This device has not reported its location recently.</p>
+        <div class="warning">
+            <strong>Possible causes:</strong><br>
+            - Location services disabled on this device<br>
+            - SimpleMDM app not running or not reporting location<br>
+            - Location data expired (older than 5 minutes)
+        </div>
+        <div class="note">
+            <strong>To restore access:</strong> Open the SimpleMDM app and ensure location services are enabled for it in Settings.
+        </div>
+    </div>
+</body>
+</html>"""

@@ -1,11 +1,30 @@
 #!/bin/bash
-# Generate .mobileconfig profile for iPhone VPN with certificate auth
+# Generate .mobileconfig profile for iPhone/Mac VPN with certificate auth
+# Supports device-specific certificates for fixed IP assignment
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/../vpn-profiles"
 mkdir -p "$OUTPUT_DIR"
 
+# Parse arguments
+DEVICE_NAME="${1:-}"  # e.g., "iphone" or "macbook-air"
+if [ -z "$DEVICE_NAME" ]; then
+    echo "Usage: $0 <device-name>"
+    echo "  device-name: 'iphone' or 'macbook-air'"
+    echo ""
+    echo "Examples:"
+    echo "  $0 iphone         # Generate profile for iPhone (IP: 10.10.10.10)"
+    echo "  $0 macbook-air    # Generate profile for MacBook Air (IP: 10.10.10.20)"
+    exit 1
+fi
+
+# Device name is used as LocalIdentifier in VPN config
+# This must match the rightid in ipsec.conf for fixed IP assignment
+LOCAL_IDENTIFIER="$DEVICE_NAME"
+
+echo "Generating VPN profile for device: $DEVICE_NAME"
+echo "LocalIdentifier: $LOCAL_IDENTIFIER"
 echo "Fetching certificates from VPN pod..."
 
 # Get the VPN pod name
@@ -25,11 +44,11 @@ fi
 echo "VPN Server: $SERVER_IP"
 echo "VPN Pod: $VPN_POD"
 
-# Fetch certificates from the pod
-echo "Extracting certificates..."
+# Fetch certificates from the pod (device-specific certs)
+echo "Extracting certificates for device: $DEVICE_NAME..."
 CA_CERT=$(kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/cacerts/ca-cert.pem 2>/dev/null)
-CLIENT_CERT=$(kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/certs/client-cert.pem 2>/dev/null)
-CLIENT_KEY=$(kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/private/client-key.pem 2>/dev/null)
+CLIENT_CERT=$(kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/certs/client-${DEVICE_NAME}-cert.pem 2>/dev/null)
+CLIENT_KEY=$(kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/private/client-${DEVICE_NAME}-key.pem 2>/dev/null)
 
 if [ -z "$CA_CERT" ] || [ -z "$CLIENT_CERT" ] || [ -z "$CLIENT_KEY" ]; then
     echo "ERROR: Could not fetch certificates. The VPN may need to be restarted to generate client certs."
@@ -81,8 +100,8 @@ UUID3=$(uuidgen)
 UUID4=$(uuidgen)
 UUID5=$(uuidgen)
 
-# Create mobileconfig
-OUTPUT_FILE="$OUTPUT_DIR/hocuspocus-vpn.mobileconfig"
+# Create mobileconfig with device-specific filename
+OUTPUT_FILE="$OUTPUT_DIR/hocuspocus-vpn-${DEVICE_NAME}.mobileconfig"
 
 cat > "$OUTPUT_FILE" << MOBILECONFIG
 <?xml version="1.0" encoding="UTF-8"?>
@@ -208,7 +227,7 @@ cat >> "$OUTPUT_FILE" << MOBILECONFIG
                         <key>RemoteIdentifier</key>
                         <string>$SERVER_IP</string>
                         <key>LocalIdentifier</key>
-                        <string>vpnclient</string>
+                        <string>$LOCAL_IDENTIFIER</string>
                         <key>AuthenticationMethod</key>
                         <string>Certificate</string>
                         <key>PayloadCertificateUUID</key>
@@ -243,9 +262,9 @@ cat >> "$OUTPUT_FILE" << MOBILECONFIG
         </dict>
     </array>
     <key>PayloadDisplayName</key>
-    <string>Hocuspocus VPN</string>
+    <string>Hocuspocus VPN ($DEVICE_NAME)</string>
     <key>PayloadIdentifier</key>
-    <string>com.hocuspocus.vpn</string>
+    <string>com.hocuspocus.vpn.$DEVICE_NAME</string>
     <key>PayloadRemovalDisallowed</key>
     <false/>
     <key>PayloadType</key>

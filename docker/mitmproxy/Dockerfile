@@ -22,9 +22,10 @@ ENTRYPOINT ["mitmdump", \
     "--set", "confdir=/home/mitmproxy/.mitmproxy", \
     "--mode", "transparent", \
     "-s", "/app/proxy_handler.py", \
-    "--ignore-hosts", "^(.+\\.)?icloud\\.com:443$", \
-    "--ignore-hosts", "^(.+\\.)?apple\\.com:443$", \
-    "--ignore-hosts", "^(.+\\.)?mzstatic\\.com:443$", \
+    "--ignore-hosts", "^(.+\\.)?icloud\\.com(:|$)", \
+    "--ignore-hosts", "^(.+\\.)?apple\\.com(:|$)", \
+    "--ignore-hosts", "^(.+\\.)?mzstatic\\.com(:|$)", \
+    "--ignore-hosts", "^17\\.", \
     "--ignore-hosts", "^.*:6443$", \
     "--ignore-hosts", "^34\\.79\\.45\\.66:443$", \
     "--ignore-hosts", "^35\\.240\\.10\\.96:443$", \

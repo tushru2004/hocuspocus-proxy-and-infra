@@ -23,9 +23,10 @@ help:
 	@echo "VPN:"
 	@echo "  make vpn-ip              - Get VPN LoadBalancer IP"
 	@echo "  make vpn-status          - Check VPN connection status"
-	@echo "  make vpn-profile         - Generate iPhone .mobileconfig profile"
-	@echo "  make vpn-profile-install - Push profile via Apple Configurator (requires tap)"
-	@echo "  make vpn-profile-mdm     - Push profile via SimpleMDM (fully automatic)"
+	@echo "  make vpn-profile DEVICE=iphone         - Generate VPN profile for device"
+	@echo "  make vpn-profile-install DEVICE=iphone - Push profile via Apple Configurator"
+	@echo "  make vpn-profile-mdm DEVICE=iphone     - Push profile via SimpleMDM"
+	@echo "    Devices: iphone (IP: 10.10.10.10), macbook-air (IP: 10.10.10.20)"
 	@echo "  make verify-vpn             - Quick VPN verification (uses pymobiledevice3)"
 	@echo "  make verify-vpn-appium-prod - Full VPN verification (uses Appium, prod DB)"
 	@echo ""
@@ -197,21 +198,36 @@ vpn-creds:
 	@echo "Password: $$(kubectl get secret vpn-secrets -n $(NAMESPACE) -o jsonpath='{.data.VPN_PASSWORD}' | base64 -d)"
 	@echo ""
 
-vpn-profile: ## Generate iPhone .mobileconfig profile for certificate-based VPN auth
-	@./scripts/generate-vpn-profile.sh
+vpn-profile: ## Generate VPN profile for device (Usage: make vpn-profile DEVICE=iphone)
+	@if [ -z "$(DEVICE)" ]; then \
+		echo "Usage: make vpn-profile DEVICE=<device-name>"; \
+		echo "  DEVICE: 'iphone' (IP: 10.10.10.10) or 'macbook-air' (IP: 10.10.10.20)"; \
+		exit 1; \
+	fi
+	@./scripts/generate-vpn-profile.sh $(DEVICE)
 
-vpn-profile-serve: vpn-profile ## Generate and serve VPN profile via HTTP for iPhone download
-	@echo "Serving VPN profile at http://$$(ipconfig getifaddr en0):8000/hocuspocus-vpn.mobileconfig"
-	@echo "Open this URL on your iPhone to install the profile"
+vpn-profile-serve: ## Serve VPN profiles via HTTP
+	@echo "Serving VPN profiles at http://$$(ipconfig getifaddr en0):8000/"
 	@cd vpn-profiles && python3 -m http.server 8000
 
-vpn-profile-install: vpn-profile ## Generate and push VPN profile to connected iPhone (requires tap to install)
-	@echo "Pushing VPN profile to connected iPhone..."
-	@"/Applications/Apple Configurator.app/Contents/MacOS/cfgutil" --foreach install-profile vpn-profiles/hocuspocus-vpn.mobileconfig
-	@echo "Profile pushed! Tap 'Install' on the iPhone to complete installation."
+vpn-profile-install: ## Push VPN profile via Apple Configurator (Usage: make vpn-profile-install DEVICE=iphone)
+	@if [ -z "$(DEVICE)" ]; then \
+		echo "Usage: make vpn-profile-install DEVICE=<device-name>"; \
+		echo "  DEVICE: 'iphone' (IP: 10.10.10.10) or 'macbook-air' (IP: 10.10.10.20)"; \
+		exit 1; \
+	fi
+	@./scripts/generate-vpn-profile.sh $(DEVICE)
+	@echo "Pushing VPN profile to connected device..."
+	@"/Applications/Apple Configurator.app/Contents/MacOS/cfgutil" --foreach install-profile vpn-profiles/hocuspocus-vpn-$(DEVICE).mobileconfig
+	@echo "Profile pushed! Tap 'Install' on the device to complete installation."
 
-vpn-profile-mdm: ## Generate and push VPN profile via SimpleMDM (fully automatic, no tap required)
-	@./scripts/push-vpn-profile-mdm.sh
+vpn-profile-mdm: ## Push VPN profile via SimpleMDM (Usage: make vpn-profile-mdm DEVICE=iphone)
+	@if [ -z "$(DEVICE)" ]; then \
+		echo "Usage: make vpn-profile-mdm DEVICE=<device-name>"; \
+		echo "  DEVICE: 'iphone' (IP: 10.10.10.10) or 'macbook-air' (IP: 10.10.10.20)"; \
+		exit 1; \
+	fi
+	@./scripts/push-vpn-profile-mdm.sh $(DEVICE)
 
 # ============================================================================
 # Infrastructure (Terraform)
@@ -396,3 +412,16 @@ macos-pf-install: ## Install pf kill switch (blocks internet without VPN)
 macos-pf-uninstall: ## Uninstall pf kill switch (restores normal networking)
 	@echo "Uninstalling pf kill switch (requires sudo)..."
 	@sudo ./macos/scripts/uninstall-pf-killswitch.sh
+
+macos-location-install: ## Install location sender daemon on macOS (sends GPS to proxy)
+	@./macos/location-daemon/install.sh
+
+macos-location-uninstall: ## Uninstall location sender daemon from macOS
+	@echo "Uninstalling location sender..."
+	@launchctl unload ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist 2>/dev/null || true
+	@rm -f ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist
+	@sudo rm -f /usr/local/bin/hocuspocus-location-sender.py
+	@echo "Location sender uninstalled."
+
+macos-location-logs: ## View location sender logs
+	@tail -f /var/log/hocuspocus-location-sender.log

@@ -96,6 +96,19 @@ data:
     CREATE INDEX IF NOT EXISTS idx_location_whitelist_location ON blocked_location_whitelist(blocked_location_id);
     CREATE INDEX IF NOT EXISTS idx_location_whitelist_domain ON blocked_location_whitelist(domain);
 
+    -- Table to store device locations from MDM polling
+    CREATE TABLE IF NOT EXISTS device_locations (
+        id SERIAL PRIMARY KEY,
+        device_id VARCHAR(255) NOT NULL UNIQUE,
+        latitude DECIMAL(10, 8) NOT NULL,
+        longitude DECIMAL(11, 8) NOT NULL,
+        accuracy INTEGER,
+        location_updated_at TIMESTAMP,
+        fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_device_locations_device_id ON device_locations(device_id);
+
     -- Insert default allowed hosts
     INSERT INTO allowed_hosts (domain, enabled)
     VALUES

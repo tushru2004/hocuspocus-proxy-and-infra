@@ -6,7 +6,7 @@ Refactored using Clean Architecture principles.
 Handles:
 - Domain whitelisting/blocking
 - YouTube channel filtering
-- GPS location tracking and location-based blocking
+- GPS location tracking and location-based blocking (via MDM polling)
 - Custom block pages
 
 Run as follows: mitmproxy -s proxy_handler.py
@@ -15,6 +15,7 @@ import re
 import logging
 import json
 import ipaddress
+import time
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -31,6 +32,28 @@ from application.use_cases import (
     VerifyLocationRestrictions
 )
 from adapters.presentation import HTMLBlockPageRenderer
+
+# How often to check device location from DB (seconds)
+LOCATION_CHECK_INTERVAL = 10
+
+# Maximum age of location data before blocking requests (seconds)
+# If the device hasn't reported location within this time, block its traffic
+MAX_LOCATION_AGE_SECONDS = 300  # 5 minutes
+
+# Whether to require location data to allow traffic
+# When True: blocks requests if the device hasn't reported fresh location
+# When False: original behavior (only blocks at blocked locations)
+REQUIRE_LOCATION_DATA = True
+
+# VPN client IP to SimpleMDM device ID mapping
+# VPN assigns fixed IPs to each device based on their certificate CN
+VPN_IP_TO_DEVICE_ID = {
+    "10.10.10.10": "2154382",  # iPhone
+    "10.10.10.20": "2162127",  # MacBook Air
+}
+
+# Default device ID if IP not in mapping (fallback for legacy shared cert)
+DEFAULT_DEVICE_ID = "2154382"  # iPhone
 
 
 class ProxyHandler:
@@ -63,13 +86,24 @@ class ProxyHandler:
         # Track recently approved YouTube video IDs for googlevideo.com correlation
         self._approved_video_ids: set[str] = set()
 
+        # Location tracking from MDM polling
+        self._last_location_check = 0.0
+        self._location_data_missing = {}  # Dict of device_id -> bool (True if no fresh location)
+        self._current_device_id = None  # Current request's device ID
+
     def request(self, flow):
         """Handle incoming requests."""
         self.num += 1
         logging.info(f"We've seen {self.num} flows")
         logging.info(f"Request URL: {flow.request.host}")
 
-        # Handle location tracking endpoint
+        # Identify device from VPN client IP
+        self._current_device_id = self._get_device_id_from_flow(flow)
+
+        # Check device location from MDM polling (periodically)
+        self._check_device_location(self._current_device_id)
+
+        # Handle location tracking endpoint (legacy JavaScript-based)
         if flow.request.path == "/__track_location__" and flow.request.method == "POST":
             self._handle_location_tracking(flow)
             return
@@ -79,7 +113,32 @@ class ProxyHandler:
             self._handle_youtube_video_check(flow)
             return
 
+        # Allow OCSP (certificate validation) requests
+        # OCSP requests are HTTP (no SNI) to IP addresses with base64-encoded paths
+        if self._is_ocsp_request(flow):
+            logging.info(f"✅ Allowing OCSP certificate validation request")
+            return
+
         full_host = flow.request.host
+
+        # ================================================================
+        # BLOCK IF NO LOCATION DATA FOR THIS DEVICE
+        # If this device hasn't reported location recently, block its traffic
+        # (except essential system hosts for device functionality)
+        # ================================================================
+        if REQUIRE_LOCATION_DATA and self._current_device_id:
+            device_missing_location = self._location_data_missing.get(self._current_device_id, False)
+            if device_missing_location:
+                # Allow essential Apple hosts for device functionality
+                essential_hosts = ["apple.com", "icloud.com", "icloud-content.com", "mzstatic.com", "simplemdm.com"]
+                full_hostname, base_domain = self._extract_base_domain(flow)
+                if any(essential in base_domain for essential in essential_hosts):
+                    logging.info(f"✅ Allowing {full_hostname} (essential host, device {self._current_device_id} has no location)")
+                    return
+
+                logging.warning(f"🚫 BLOCKING {full_hostname}: Device {self._current_device_id} has no fresh location data")
+                self._send_no_location_block_response(flow)
+                return
 
         # ================================================================
         # TWO SEPARATE FLOWS based on location:
@@ -203,12 +262,13 @@ class ProxyHandler:
             return
 
     def response(self, flow):
-        """Handle responses - inject location tracking and detect captive portals."""
+        """Handle responses - inject YouTube blocking and detect captive portals."""
         if not flow.response:
             return
 
-        # Inject location tracking JavaScript into HTML responses
-        self._inject_location_tracking_script(flow)
+        # NOTE: JavaScript location tracking is DISABLED
+        # Location is now tracked via MDM polling (SimpleMDM app on device)
+        # The _check_device_location() method fetches location from DB
 
         # Inject YouTube video blocking script for SPA navigation
         self._inject_youtube_blocking_script(flow)
@@ -225,6 +285,78 @@ class ProxyHandler:
             help="Disable block global option",
         )
 
+    def _get_device_id_from_flow(self, flow) -> str:
+        """Get device ID from VPN client IP address.
+
+        Maps the client's VPN IP to a SimpleMDM device ID using the
+        VPN_IP_TO_DEVICE_ID mapping.
+        """
+        try:
+            client_ip = flow.client_conn.peername[0] if flow.client_conn.peername else None
+            if client_ip:
+                device_id = VPN_IP_TO_DEVICE_ID.get(client_ip, DEFAULT_DEVICE_ID)
+                logging.debug(f"Client IP {client_ip} -> Device ID {device_id}")
+                return device_id
+        except Exception as e:
+            logging.error(f"Error getting device ID from flow: {e}")
+        return DEFAULT_DEVICE_ID
+
+    def _check_device_location(self, device_id: str = None) -> None:
+        """Check device location from MDM-polled database.
+
+        This method fetches the latest device location from the database
+        (populated by the MDM location polling script) and verifies if
+        the device is at a blocked location.
+
+        Also checks if location data is fresh enough - if not, sets
+        _location_data_missing flag for the specific device.
+
+        Args:
+            device_id: The SimpleMDM device ID to check location for
+        """
+        current_time = time.time()
+
+        # Only check periodically to avoid DB spam
+        if current_time - self._last_location_check < LOCATION_CHECK_INTERVAL:
+            return
+
+        self._last_location_check = current_time
+        device_id = device_id or DEFAULT_DEVICE_ID
+
+        try:
+            # Check if this device has fresh location data
+            if REQUIRE_LOCATION_DATA:
+                has_fresh = self.location_repository.has_fresh_location_data(
+                    MAX_LOCATION_AGE_SECONDS,
+                    device_id=device_id
+                )
+                if not has_fresh:
+                    age = self.location_repository.get_location_data_age_seconds()
+                    if age is not None:
+                        logging.warning(f"🚫 LOCATION DATA STALE for device {device_id}: Last update was {age}s ago (max: {MAX_LOCATION_AGE_SECONDS}s)")
+                    else:
+                        logging.warning(f"🚫 NO LOCATION DATA for device {device_id}")
+                    self._location_data_missing[device_id] = True
+                else:
+                    self._location_data_missing[device_id] = False
+
+            # Skip blocked zone checking if no blocked zones configured
+            if not self.verify_location.has_blocked_zones:
+                return
+
+            # Fetch location from MDM polling table for this device
+            coordinates = self.location_repository.get_device_location(device_id=device_id)
+
+            if coordinates:
+                logging.info(f"📍 Checking MDM location for device {device_id}: lat={coordinates.latitude}, lng={coordinates.longitude}")
+                # Verify location against blocked zones
+                location_decision = self.verify_location.execute(coordinates)
+                logging.info(f"📍 Location check result: blocked={self.verify_location.is_blocked}")
+            else:
+                logging.warning(f"⚠️ No location available for device {device_id} - location check skipped")
+        except Exception as e:
+            logging.error(f"❌ Error checking device location: {e}")
+
     def _handle_location_tracking(self, flow):
         """Handle location tracking endpoint."""
         logging.info(f"📍 Received location tracking request from {flow.request.host}")
@@ -232,16 +364,24 @@ class ProxyHandler:
             data = json.loads(flow.request.content)
 
             # Parse location data
+            latitude = data.get('latitude')
+            longitude = data.get('longitude')
+            accuracy = data.get('accuracy')
+            url = data.get('url', 'unknown')
+
+            # Log the received location prominently
+            logging.info(f"📍📍📍 LOCATION RECEIVED: lat={latitude}, lng={longitude}, accuracy={accuracy}m, url={url}")
+
             coordinates = GPSCoordinates(
-                latitude=data.get('latitude'),
-                longitude=data.get('longitude')
+                latitude=latitude,
+                longitude=longitude
             )
 
             location_data = LocationData(
                 coordinates=coordinates,
-                accuracy=data.get('accuracy'),
+                accuracy=accuracy,
                 altitude=data.get('altitude'),
-                url=data.get('url', 'unknown'),
+                url=url,
                 timestamp=data.get('timestamp'),
                 device_id=data.get('device_id', 'iPhone')
             )
@@ -252,6 +392,9 @@ class ProxyHandler:
             # Verify location restrictions
             location_decision = self.verify_location.execute(coordinates)
 
+            # Log the decision
+            logging.info(f"📍 Location check result: allowed={location_decision.allowed}, message={location_decision.message}")
+
             # Build response
             response_data = {
                 "status": "ok",
@@ -261,6 +404,7 @@ class ProxyHandler:
             # If blocked, include block page
             if not location_decision.allowed:
                 blocked_zone_name = self.verify_location.blocked_zone_name or "a blocked location"
+                logging.warning(f"📍🚫 USER AT BLOCKED LOCATION: {blocked_zone_name}")
                 response_data["block_page"] = self.block_page_renderer.render_location_block_page(
                     blocked_zone_name
                 )
@@ -384,6 +528,17 @@ class ProxyHandler:
             {"Content-Type": "text/html; charset=utf-8"}
         )
 
+    def _send_no_location_block_response(self, flow):
+        """Send block response when no location data is available from any device."""
+        logging.warning(f"🚫 BLOCKED - No location data from any device. All traffic blocked.")
+
+        block_page = self.block_page_renderer.render_no_location_block_page()
+        flow.response = http.Response.make(
+            403,
+            block_page.encode('utf-8'),
+            {"Content-Type": "text/html; charset=utf-8"}
+        )
+
     def _get_location_tracking_script(self) -> str:
         """Generate location tracking script for injection into pages."""
         # Skip if no blocked zones configured
@@ -487,10 +642,54 @@ class ProxyHandler:
         """
         return flow.request.pretty_url
 
+    def _is_ocsp_request(self, flow) -> bool:
+        """Detect OCSP (Online Certificate Status Protocol) requests.
+
+        OCSP is used by browsers to verify TLS certificate revocation status.
+        These requests are made via HTTP (not HTTPS) to certificate authority
+        responders, typically at bare IP addresses.
+
+        Characteristics of OCSP requests:
+        - HTTP (port 80) not HTTPS
+        - Path starts with base64-encoded ASN.1 data (typically /ME... or /MF...)
+        - Often to bare IP addresses (no hostname/SNI)
+
+        Safari makes these requests to validate certificates before loading
+        HTTPS pages. Blocking them causes Safari to hang waiting for
+        certificate validation.
+        """
+        # OCSP is always HTTP (port 80)
+        if flow.request.port != 80 and flow.request.scheme != "http":
+            return False
+
+        # Check if path looks like base64-encoded OCSP data
+        # OCSP paths start with base64 characters, commonly M (from ME, MF, etc.)
+        path = flow.request.path
+        if not path:
+            return False
+
+        # OCSP request paths start with / followed by base64
+        # Common patterns: /ME8w..., /MFYw..., /MFQw..., etc.
+        # Base64 alphabet: A-Z, a-z, 0-9, +, /, =
+        if len(path) > 10 and path.startswith('/M'):
+            # Check if the rest looks like base64
+            import string
+            base64_chars = set(string.ascii_letters + string.digits + '+/=')
+            # Check first 20 chars after the /
+            sample = path[1:21] if len(path) > 21 else path[1:]
+            if all(c in base64_chars for c in sample):
+                logging.info(f"🔐 Detected OCSP request: {flow.request.host}:{flow.request.port}{path[:50]}...")
+                return True
+
+        return False
+
     def _inject_location_tracking_script(self, flow):
         """Inject location tracking JavaScript into HTML responses."""
+        full_host = flow.request.host
+
         # Skip injection entirely if no blocked zones are configured
         if not self.verify_location.has_blocked_zones:
+            logging.debug(f"📍 Skipping location injection for {full_host}: no blocked zones configured")
             return
 
         # Skip injection if user is already at a blocked location
@@ -498,6 +697,7 @@ class ProxyHandler:
         # This prevents the tracking script from showing a block page
         # on domains that were allowed via the per-location whitelist
         if self.verify_location.is_blocked:
+            logging.debug(f"📍 Skipping location injection for {full_host}: already at blocked location")
             return
 
         # Skip injection for essential/auth domains (to avoid breaking login flows)
@@ -514,14 +714,21 @@ class ProxyHandler:
             "chromewebstore.google.com"
         ]
 
-        full_host = flow.request.host
         if any(domain in full_host for domain in essential_domains):
+            logging.debug(f"📍 Skipping location injection for {full_host}: essential domain")
             return
 
         content_type = flow.response.headers.get("content-type", "")
-        if "text/html" in content_type and flow.response.status_code == 200:
-            try:
-                location_script = """
+        if "text/html" not in content_type:
+            logging.debug(f"📍 Skipping location injection for {full_host}: content-type is {content_type}")
+            return
+        if flow.response.status_code != 200:
+            logging.debug(f"📍 Skipping location injection for {full_host}: status code is {flow.response.status_code}")
+            return
+
+        # At this point we have an HTML response that needs location tracking
+        try:
+            location_script = """
 <style>
 #location-permission-overlay {
     position: fixed;
@@ -588,13 +795,6 @@ class ProxyHandler:
 #location-permission-content .btn:hover {
     background: #5568d3;
 }
-#location-permission-content .btn-secondary {
-    background: #e0e0e0;
-    color: #333;
-}
-#location-permission-content .btn-secondary:hover {
-    background: #d0d0d0;
-}
 </style>
 <div id="location-permission-overlay">
     <div id="location-permission-content">
@@ -603,9 +803,6 @@ class ProxyHandler:
         <p>This site requires location permission to verify access.</p>
         <div class="spinner"></div>
         <p id="location-status">Waiting for permission...</p>
-        <div id="location-buttons" style="display: none;">
-            <button id="continue-btn" class="btn btn-secondary">Continue Anyway</button>
-        </div>
     </div>
 </div>
 <script>
@@ -623,8 +820,6 @@ class ProxyHandler:
     }
 
     var status = document.getElementById('location-status');
-    var buttons = document.getElementById('location-buttons');
-    var continueBtn = document.getElementById('continue-btn');
     var promptTimeout = null;
     var permissionRequested = false;
 
@@ -643,32 +838,21 @@ class ProxyHandler:
         } catch(e) {}
     }
 
-    function showError(message, showContinue) {
+    function showError(message) {
         status.innerHTML = '<span class="error">' + message + '</span>';
         var spinner = document.querySelector('.spinner');
         if (spinner) {
             spinner.style.display = 'none';
-        }
-        if (showContinue) {
-            buttons.style.display = 'block';
         }
         if (promptTimeout) {
             clearTimeout(promptTimeout);
         }
     }
 
-    // Add click handler for continue button
-    if (continueBtn) {
-        continueBtn.addEventListener('click', function() {
-            markLocationTracked();
-            hideOverlay();
-        });
-    }
-
     // Set timeout to detect if permission prompt never appears
     promptTimeout = setTimeout(function() {
         if (!permissionRequested) {
-            showError('⚠️ Location permission prompt not shown.<br><br>Location services may be disabled in Safari settings or system preferences.<br><br>To enable: Settings > Safari > Location Services > Allow', true);
+            showError('⚠️ Location permission prompt not shown.<br><br>Location services may be disabled in Safari settings or system preferences.<br><br>To enable: Settings > Safari > Location Services > Allow');
         }
     }, 2000);
 
@@ -731,20 +915,23 @@ class ProxyHandler:
 })();
 </script>
 """
-                html = flow.response.text
+            html = flow.response.text
 
-                # Inject before </body> or </html> tag
-                if "</body>" in html:
-                    html = html.replace("</body>", location_script + "</body>")
-                elif "</html>" in html:
-                    html = html.replace("</html>", location_script + "</html>")
-                else:
-                    html += location_script
+            # Inject before </body> or </html> tag
+            if "</body>" in html:
+                html = html.replace("</body>", location_script + "</body>")
+                logging.info(f"📍 INJECTED location tracking script into {full_host} (before </body>)")
+            elif "</html>" in html:
+                html = html.replace("</html>", location_script + "</html>")
+                logging.info(f"📍 INJECTED location tracking script into {full_host} (before </html>)")
+            else:
+                html += location_script
+                logging.info(f"📍 INJECTED location tracking script into {full_host} (appended)")
 
-                flow.response.text = html
+            flow.response.text = html
 
-            except Exception as e:
-                logging.error(f"❌ Error injecting location script: {e}")
+        except Exception as e:
+            logging.error(f"❌ Error injecting location script: {e}")
 
     def _inject_youtube_blocking_script(self, flow):
         """Inject JavaScript into YouTube pages to show block overlay for SPA navigation."""

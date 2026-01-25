@@ -42,13 +42,13 @@ class TestVPNVerification:
         print("✅ [TEST] JRE video ALLOWED (as expected)")
 
     @pytest.mark.timeout(60)
-    def test_twitter_blocked(self, ios_driver, mitmproxy_logs):
-        """Test that twitter.com is blocked (non-whitelisted domain)."""
-        print("\n📱 [TEST] Opening twitter.com (should be blocked)...")
+    def test_reddit_blocked(self, ios_driver, mitmproxy_logs):
+        """Test that reddit.com is blocked (non-whitelisted domain)."""
+        print("\n📱 [TEST] Opening reddit.com (should be blocked)...")
 
         # Add cache bust to ensure fresh request
         cache_bust = int(time.time())
-        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        ios_driver.get(f"https://reddit.com/?_cb={cache_bust}")
 
         # Wait for request to be processed
         time.sleep(6)
@@ -56,17 +56,17 @@ class TestVPNVerification:
         # Check proxy logs
         logs = mitmproxy_logs(tail=50)
 
-        # Verify twitter was blocked
+        # Verify reddit was blocked
         blocked = (
-            "BLOCKING" in logs and
-            ("twitter" in logs.lower() or "x.com" in logs.lower())
+            ("BLOCKING" in logs or "BLOCKED" in logs) and
+            "reddit" in logs.lower()
         )
-        generic_blocked = "BLOCKING non-whitelisted domain" in logs
+        generic_blocked = "BLOCKING non-whitelisted domain" in logs or "BLOCKED" in logs
 
         assert blocked or generic_blocked, \
-            f"twitter.com was not blocked! Expected BLOCKING in logs."
+            f"reddit.com was not blocked! Expected BLOCKING or BLOCKED in logs."
 
-        print("✅ [TEST] twitter.com BLOCKED (as expected)")
+        print("✅ [TEST] reddit.com BLOCKED (as expected)")
 
     @pytest.mark.timeout(30)
     def test_google_allowed(self, ios_driver, mitmproxy_logs):
@@ -113,7 +113,7 @@ class TestLocationWhitelist:
 
         # First, visit a non-whitelisted site to trigger location tracking
         cache_bust = int(time.time())
-        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        ios_driver.get(f"https://reddit.com/?_cb={cache_bust}")
         time.sleep(8)  # Wait for location tracking to complete
 
         # Check if we're at a blocked location
@@ -146,7 +146,7 @@ class TestLocationWhitelist:
         print("\n📱 [TEST] Testing that non-whitelisted domain is blocked at blocked location...")
 
         cache_bust = int(time.time())
-        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        ios_driver.get(f"https://reddit.com/?_cb={cache_bust}")
         time.sleep(8)
 
         logs = mitmproxy_logs(tail=50)
@@ -158,9 +158,9 @@ class TestLocationWhitelist:
             # Check if we got regular domain blocking instead
             if "BLOCKING non-whitelisted domain" in logs:
                 pytest.skip("Not at blocked location - got regular domain blocking instead")
-            pytest.fail("twitter.com was not blocked!")
+            pytest.fail("reddit.com was not blocked!")
 
-        print("✅ [TEST] twitter.com BLOCKED at blocked location (as expected)")
+        print("✅ [TEST] reddit.com BLOCKED at blocked location (as expected)")
 
 
 class TestVPNQuickCheck:
@@ -172,13 +172,13 @@ class TestVPNQuickCheck:
         print("\n📱 [QUICK] Testing domain blocking...")
 
         cache_bust = int(time.time())
-        ios_driver.get(f"https://twitter.com/?_cb={cache_bust}")
+        ios_driver.get(f"https://reddit.com/?_cb={cache_bust}")
 
         time.sleep(5)
 
         logs = mitmproxy_logs(tail=30)
 
-        assert "BLOCKING" in logs, \
+        assert "BLOCKED" in logs or "BLOCKING" in logs, \
             "No blocking detected in logs - VPN filtering may not be working!"
 
         print("✅ [QUICK] Domain blocking is working")

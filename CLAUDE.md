@@ -279,6 +279,7 @@ This is implemented in `scripts/generate-vpn-profile.sh` and allows:
 | Xcode shows device "unavailable" with AlwaysOn VPN | CoreDevice blocked by VPN | Fixed: `ServiceExceptions` with `DeviceCommunication: Allow` (iOS 17.4+) |
 | Trust dialog auto-dismisses on supervised device | Device supervised without "Allow pairing" | Re-supervise with Apple Configurator: Options → Allow pairing with non-Configurator hosts |
 | WebDriverAgent fails to launch | Developer certificate not trusted | Settings → General → VPN & Device Management → Trust developer certificate |
+| Developer certificate disappears from Settings | VPN blocking Apple developer domains | Add to whitelist: `developer.apple.com`, `developerservices2.apple.com`, `identity.apple.com` |
 | E2E tests fail with code 65 | WDA needs rebuild after re-supervision | Run: `xcodebuild -project ~/.appium/.../WebDriverAgent.xcodeproj -scheme WebDriverAgentRunner -destination 'id=UDID' DEVELOPMENT_TEAM=TEAM_ID build-for-testing` |
 
 ## Supervised Device Setup
@@ -599,10 +600,43 @@ macOS cannot be truly supervised without Apple Business Manager (ABM). As a work
 
 ### SimpleMDM Device Identifiers
 
-| Device | SimpleMDM ID | Type |
-|--------|--------------|------|
-| iPhone XR | 2154382 | iOS (supervised) |
-| MacBook Air | 2162127 | macOS (User-Approved MDM) |
+| Device | SimpleMDM ID | VPN IP | Type |
+|--------|--------------|--------|------|
+| iPhone XR | 2154382 | 10.10.10.10 | iOS (supervised) |
+| MacBook Air | 2162127 | 10.10.10.20 | macOS (User-Approved MDM) |
+
+### SSH to MacBook Air
+
+The MacBook Air is accessible via Tailscale:
+
+```bash
+# SSH via Tailscale
+ssh tushru2004@100.69.178.103
+
+# Or using Tailscale hostname
+ssh tushru2004@tushru2004s-macbook-air
+
+# Run Homebrew commands (not in default PATH)
+/opt/homebrew/bin/brew install <package>
+/opt/homebrew/bin/python3.12 -m pip install <package>
+```
+
+### macOS Location Daemon
+
+The MacBook Air runs a location sender daemon that POSTs GPS to the proxy:
+
+```bash
+# Check status
+ssh tushru2004@100.69.178.103 "launchctl list | grep hocuspocus"
+
+# View logs
+ssh tushru2004@100.69.178.103 "tail -f /tmp/hocuspocus-location-sender.log"
+
+# Restart daemon
+ssh tushru2004@100.69.178.103 "launchctl unload ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist && launchctl load ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist"
+```
+
+**Requires location permission:** System Settings > Privacy & Security > Location Services > Enable for Python
 
 ## SimpleMDM Munki App Deployment
 

@@ -108,6 +108,56 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
 
+        # Location polling sidecar - fetches device location from SimpleMDM
+        - name: location-poller
+          image: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn/mitmproxy:latest
+          imagePullPolicy: Always
+          command: ["python", "/app/poll_mdm_location.py"]
+
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: mitmproxy-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: POSTGRES_PASSWORD
+            - name: SIMPLEMDM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mitmproxy-secrets
+                  key: SIMPLEMDM_API_KEY
+            - name: SIMPLEMDM_DEVICE_IDS
+              value: "2154382,2162127"  # iPhone, MacBook Air
+            - name: POLL_INTERVAL_SECONDS
+              value: "30"
+
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
       volumes:
         - name: mitmproxy-certs
           persistentVolumeClaim:

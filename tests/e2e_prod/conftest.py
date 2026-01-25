@@ -49,17 +49,22 @@ def ios_driver():
     options.platform_name = "iOS"
     options.browser_name = "Safari"
     options.automation_name = "XCUITest"
-    options.no_reset = True
+    options.no_reset = False  # Allow reset to clear Safari data
     options.set_capability("autoAcceptAlerts", True)
+    # Clear Safari cache/cookies on session start
+    options.set_capability("safari:safariClearWebsiteData", True)
 
     # Real device config
     options.platform_version = "18.7.3"
     options.device_name = "Tushar's iPhone"
     options.udid = "00008020-0004695621DA002E"
     options.set_capability("xcodeOrgId", "QG9U628JFD")
-    options.set_capability("xcodeSigningId", "iPhone Developer")
+    options.set_capability("xcodeSigningId", "Apple Development")
     options.updated_wda_bundle_id = "com.hocuspocus.WebDriverAgentRunner"
     options.set_capability("usePrebuiltWDA", True)
+    options.set_capability("derivedDataPath", "/Users/tushar/Library/Developer/Xcode/DerivedData/WebDriverAgent-clkfczzppyhxsqbbzslmbrysyvbk")
+    options.set_capability("skipUninstall", True)
+    options.set_capability("showXcodeLog", True)
     options.set_capability("wdaLaunchTimeout", 600000)  # 10 minutes
     options.set_capability("wdaConnectionTimeout", 240000)  # 4 minutes
     options.set_capability("newCommandTimeout", 300)  # 5 minutes
