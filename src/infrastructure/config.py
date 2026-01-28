@@ -2,9 +2,6 @@
 import os
 import logging
 from dataclasses import dataclass
-from typing import List
-
-from domain.entities import BlockedZone
 
 
 @dataclass
@@ -49,21 +46,11 @@ class AppConfig:
     """Application configuration."""
     database: DatabaseConfig
     youtube: YouTubeConfig
-    blocked_zones: List[BlockedZone]
 
     @classmethod
     def load(cls) -> 'AppConfig':
         """Load application configuration."""
-        from adapters.repositories import PostgresLocationRepository
-
-        db_config = DatabaseConfig.from_env()
-
-        # Load blocked zones from database
-        location_repo = PostgresLocationRepository(db_config.connection_string)
-        blocked_zones = location_repo.get_blocked_zones()
-
         return cls(
-            database=db_config,
-            youtube=YouTubeConfig.from_env(),
-            blocked_zones=blocked_zones
+            database=DatabaseConfig.from_env(),
+            youtube=YouTubeConfig.from_env()
         )

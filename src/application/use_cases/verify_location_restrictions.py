@@ -1,17 +1,18 @@
 """Use case for verifying location restrictions."""
-from typing import List, Optional
+from typing import Optional
 import logging
 
 from domain.entities import BlockedZone
 from domain.value_objects import GPSCoordinates, AccessDecision, BlockReason
 from domain.exceptions import LocationBasedBlockError
+from application.interfaces.repositories import LocationRepository
 
 
 class VerifyLocationRestrictions:
     """Use case for checking if current location is in a blocked zone."""
 
-    def __init__(self, blocked_zones: List[BlockedZone]):
-        self._blocked_zones = blocked_zones
+    def __init__(self, location_repository: LocationRepository):
+        self._location_repository = location_repository
         self._currently_at_blocked_location = False
         self._current_blocked_zone: Optional[BlockedZone] = None
         self._last_distance: Optional[float] = None
@@ -26,7 +27,10 @@ class VerifyLocationRestrictions:
         Returns:
             AccessDecision indicating if browsing is allowed
         """
-        for zone in self._blocked_zones:
+        # Always fetch fresh blocked zones from database (no caching)
+        blocked_zones = self._location_repository.get_blocked_zones()
+        
+        for zone in blocked_zones:
             is_within, distance = zone.is_within_zone(coordinates)
             if is_within:
                 self._currently_at_blocked_location = True
@@ -70,4 +74,5 @@ class VerifyLocationRestrictions:
     @property
     def has_blocked_zones(self) -> bool:
         """Check if any blocked zones are configured."""
-        return len(self._blocked_zones) > 0
+        blocked_zones = self._location_repository.get_blocked_zones()
+        return len(blocked_zones) > 0

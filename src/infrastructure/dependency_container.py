@@ -91,6 +91,6 @@ class DependencyContainer:
         """Get VerifyLocationRestrictions use case instance."""
         if 'verify_location' not in self._instances:
             self._instances['verify_location'] = VerifyLocationRestrictions(
-                self._config.blocked_zones
+                self.get_location_repository()
             )
         return self._instances['verify_location']

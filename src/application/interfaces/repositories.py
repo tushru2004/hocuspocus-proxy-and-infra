@@ -1,7 +1,7 @@
 """Repository interfaces (protocols) for the application layer."""
 from typing import Protocol, List, Optional
 
-from domain.entities import Domain, YouTubeChannel, Location
+from domain.entities import Domain, YouTubeChannel, Location, BlockedZone
 from domain.value_objects import LocationData
 
 
@@ -30,4 +30,8 @@ class LocationRepository(Protocol):
 
     def get_recent_locations(self, limit: int = 20) -> List[Location]:
         """Get recent locations."""
+        ...
+
+    def get_blocked_zones(self) -> List[BlockedZone]:
+        """Get all blocked zones."""
         ...
