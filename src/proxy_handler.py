@@ -19,6 +19,10 @@ import time
 from typing import Optional
 from urllib.parse import urlencode
 
+# YouTube CDN grace window (seconds) to allow initial googlevideo.com requests
+# before the video ID is known (SPA race condition)
+YOUTUBE_CDN_GRACE_SECONDS = 30
+
 from mitmproxy import ctx, http
 import tldextract
 
@@ -85,6 +89,7 @@ class ProxyHandler:
 
         # Track recently approved YouTube video IDs for googlevideo.com correlation
         self._approved_video_ids: set[str] = set()
+        self._youtube_grace_until: float | None = None
 
         # Location tracking from MDM polling
         self._last_location_check = 0.0
@@ -183,6 +188,7 @@ class ProxyHandler:
                     logging.info("🚫 BLOCKING YouTube video (channel not whitelisted)")
                     # Clear approved videos when blocking - user switched to non-whitelisted content
                     self._approved_video_ids.clear()
+                    self._youtube_grace_until = None
                     logging.info("🗑️ Cleared approved video IDs")
                     block_page = self.block_page_renderer.render_youtube_block_page()
                     block_page = self._inject_location_script_into_html(block_page)
@@ -194,15 +200,19 @@ class ProxyHandler:
                     return
                 else:
                     # Track approved video ID for googlevideo.com correlation
-                    if "whitelisted" in youtube_decision.message and current_video_id:
+                    if youtube_decision.allowed and current_video_id:
                         self._approved_video_ids.add(current_video_id)
                         logging.info(f"📝 Tracking approved video ID: {current_video_id}")
+                        # Allow a short grace window for CDN requests before approval propagates
+                        self._youtube_grace_until = time.time() + YOUTUBE_CDN_GRACE_SECONDS
+                        logging.info(f"🟡 YouTube grace window until {self._youtube_grace_until}")
                     logging.info(f"✅ YouTube check passed: {youtube_url}")
 
             # Special handling for googlevideo.com (YouTube CDN)
             if self.check_youtube_access.is_enabled and 'googlevideo.com' in full_hostname:
                 referer = flow.request.headers.get("Referer", "")
-                logging.info(f"🔍 Checking googlevideo.com request (Referer: {referer})")
+                grace_active = self._youtube_grace_until and time.time() < self._youtube_grace_until
+                logging.info(f"🔍 Checking googlevideo.com request (Referer: {referer}, grace_active={grace_active})")
 
                 if referer and 'youtube.com' in referer:
                     # Try to extract video ID from referer and check channel
@@ -214,15 +224,19 @@ class ProxyHandler:
                         if self._approved_video_ids:
                             logging.info(f"✅ googlevideo.com allowed ({len(self._approved_video_ids)} approved videos)")
                         else:
-                            logging.info("🚫 BLOCKING googlevideo.com (no approved videos)")
-                            block_page = self.block_page_renderer.render_youtube_block_page()
-                            block_page = self._inject_location_script_into_html(block_page)
-                            flow.response = http.Response.make(
-                                403,
-                                block_page.encode('utf-8'),
-                                {"Content-Type": "text/html; charset=utf-8"}
-                            )
-                            return
+                            grace_active = self._youtube_grace_until and time.time() < self._youtube_grace_until
+                            if grace_active:
+                                logging.info("🟡 Allowing googlevideo.com (grace window)")
+                            else:
+                                logging.info("🚫 BLOCKING googlevideo.com (no approved videos)")
+                                block_page = self.block_page_renderer.render_youtube_block_page()
+                                block_page = self._inject_location_script_into_html(block_page)
+                                flow.response = http.Response.make(
+                                    403,
+                                    block_page.encode('utf-8'),
+                                    {"Content-Type": "text/html; charset=utf-8"}
+                                )
+                                return
                     elif not youtube_decision.allowed:
                         logging.info("🚫 BLOCKING googlevideo.com (YouTube channel not whitelisted)")
                         block_page = self.block_page_renderer.render_youtube_block_page()
@@ -237,15 +251,19 @@ class ProxyHandler:
                         logging.info(f"✅ googlevideo.com allowed (channel whitelisted via Referer)")
                 else:
                     # No referer or not from youtube - block by default when filtering is enabled
-                    logging.info("🚫 BLOCKING googlevideo.com (no YouTube Referer to verify channel)")
-                    block_page = self.block_page_renderer.render_youtube_block_page()
-                    block_page = self._inject_location_script_into_html(block_page)
-                    flow.response = http.Response.make(
-                        403,
-                        block_page.encode('utf-8'),
-                        {"Content-Type": "text/html; charset=utf-8"}
-                    )
-                    return
+                    grace_active = self._youtube_grace_until and time.time() < self._youtube_grace_until
+                    if grace_active:
+                        logging.info("🟡 Allowing googlevideo.com (grace window, no referer)")
+                    else:
+                        logging.info("🚫 BLOCKING googlevideo.com (no YouTube Referer to verify channel)")
+                        block_page = self.block_page_renderer.render_youtube_block_page()
+                        block_page = self._inject_location_script_into_html(block_page)
+                        flow.response = http.Response.make(
+                            403,
+                            block_page.encode('utf-8'),
+                            {"Content-Type": "text/html; charset=utf-8"}
+                        )
+                        return
 
             logging.info(f"✅ Allowing: {full_hostname} (host: {full_host})")
         else:
@@ -262,13 +280,12 @@ class ProxyHandler:
             return
 
     def response(self, flow):
-        """Handle responses - inject YouTube blocking and detect captive portals."""
+        """Handle responses - inject YouTube blocking, location overlay, and detect captive portals."""
         if not flow.response:
             return
 
-        # NOTE: JavaScript location tracking is DISABLED
-        # Location is now tracked via MDM polling (SimpleMDM app on device)
-        # The _check_device_location() method fetches location from DB
+        # Inject location overlay script for location permission prompt
+        self._inject_location_tracking_script(flow)
 
         # Inject YouTube video blocking script for SPA navigation
         self._inject_youtube_blocking_script(flow)
@@ -717,6 +734,9 @@ class ProxyHandler:
         if any(domain in full_host for domain in essential_domains):
             logging.debug(f"📍 Skipping location injection for {full_host}: essential domain")
             return
+
+        # For debugging/test visibility, log every successful injection opportunity
+        logging.info(f"📍 Injecting location overlay into {full_host}")
 
         content_type = flow.response.headers.get("content-type", "")
         if "text/html" not in content_type:
