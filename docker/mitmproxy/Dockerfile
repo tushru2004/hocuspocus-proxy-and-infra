@@ -25,6 +25,7 @@ ENTRYPOINT ["mitmdump", \
     "--ignore-hosts", "^(.+\\.)?icloud\\.com(:|$)", \
     "--ignore-hosts", "^(.+\\.)?apple\\.com(:|$)", \
     "--ignore-hosts", "^(.+\\.)?mzstatic\\.com(:|$)", \
+    "--ignore-hosts", "^(.+\\.)?simplemdm\\.com(:|$)", \
     "--ignore-hosts", "^17\\.", \
     "--ignore-hosts", "^.*:6443$", \
     "--ignore-hosts", "^34\\.79\\.45\\.66:443$", \
